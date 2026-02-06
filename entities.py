@@ -93,6 +93,7 @@ class Platform:
 		self.color = COLOR_PLATFORM
 		self.moving = moving
 		self.dir = 1 if random.random() < 0.5 else -1
+		self.vx = 0
 		self.speed = (
 			random.uniform(MOVING_PLATFORM_SPEED_MIN, MOVING_PLATFORM_SPEED_MAX)
 			if moving
@@ -115,8 +116,10 @@ class Platform:
 
 	def update(self, dt):
 		"""Update platform position if moving, and fade if landed on."""
+		self.vx = 0
 		if self.moving:
-			self.x += self.dir * self.speed * dt
+			self.vx = self.dir * self.speed
+			self.x += self.vx * dt
 			# Bounce off screen edges
 			if self.x < 0:
 				self.x = 0
