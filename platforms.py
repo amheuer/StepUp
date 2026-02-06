@@ -48,18 +48,20 @@ def create_initial_platforms():
 
 
 def generate_new_platforms(platforms):
-	"""Generate new platforms above existing ones."""
+	"""Generate new platforms above existing ones. Returns newly created platforms."""
+	new_platforms = []
 	while len(platforms) < 10:
 		top_y = min((p.y for p in platforms), default=0)
 		new_y = top_y - random.randint(60, 140)
 		new_x = random.randint(0, WINDOW_WIDTH - 60)
 		is_moving = random.random() < MOVING_PLATFORM_CHANCE
-		platforms.append(
-			Platform(
-				new_x,
-				new_y,
-				width=random.randint(50, 90),
-				height=PLATFORM_HEIGHT,
-				moving=is_moving,
-			)
+		new_platform = Platform(
+			new_x,
+			new_y,
+			width=random.randint(50, 90),
+			height=PLATFORM_HEIGHT,
+			moving=is_moving,
 		)
+		platforms.append(new_platform)
+		new_platforms.append(new_platform)
+	return new_platforms

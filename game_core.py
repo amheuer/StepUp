@@ -5,6 +5,7 @@ import sys
 import pygame
 
 from collisions import check_if_on_platform
+from coins import collect_coins, cull_coins, spawn_coins_near_platforms
 from config import (
 	COLOR_BG,
 	COLOR_GAME_OVER,
@@ -38,6 +39,7 @@ class Game:
 		"""Reset game state for a new game."""
 		self.player = Player(WINDOW_WIDTH // 2, WINDOW_HEIGHT - 80)
 		self.platforms = create_initial_platforms()
+		self.coins = spawn_coins_near_platforms(self.platforms)
 		self.score = 0
 
 	def handle_events(self):
@@ -79,6 +81,7 @@ class Game:
 			self.player.on_platform = True
 			self.player.vy = 0  # Stop velocity when on platform (gravity won't apply while on platform)
 			self.player.can_jump = True  # Allow player to jump
+			self.player.x += platform_below.vx * dt
 			platform_below.land()  # Start fading this platform
 
 		# Handle scrolling
@@ -87,6 +90,8 @@ class Game:
 			self.player.y = SCROLL_THRESHOLD
 			for platform in self.platforms:
 				platform.y += dy
+			for coin in self.coins:
+				coin.y += dy
 			self.score += int(dy)
 
 		# Remove off-screen or faded platforms
@@ -95,7 +100,16 @@ class Game:
 		]
 
 		# Generate new platforms
-		generate_new_platforms(self.platforms)
+		new_platforms = generate_new_platforms(self.platforms)
+
+		# Add coins near platforms
+		self.coins.extend(spawn_coins_near_platforms(new_platforms))
+
+		# Collect coins
+		self.score += collect_coins(self.player, self.coins)
+
+		# Cull coins
+		self.coins = cull_coins(self.coins)
 
 		# Check game over condition
 		if self.player.y - self.player.radius > WINDOW_HEIGHT:
@@ -132,6 +146,8 @@ class Game:
 		# Draw platforms and player
 		for platform in self.platforms:
 			platform.draw(self.screen)
+		for coin in self.coins:
+			coin.draw(self.screen)
 		self.player.draw(self.screen)
 
 		# Draw UI
