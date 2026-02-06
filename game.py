@@ -32,6 +32,7 @@ PLATFORM_BASE_WIDTH = 60
 MOVING_PLATFORM_CHANCE = 0.12
 MOVING_PLATFORM_SPEED_MIN = 30
 MOVING_PLATFORM_SPEED_MAX = 70
+PLATFORM_FADE_DURATION = 1.5  # Seconds before platform disappears after landing
 
 # Scroll
 SCROLL_THRESHOLD = WINDOW_HEIGHT * 0.4
@@ -60,6 +61,9 @@ class Player:
 		self.vx = 0
 		self.vy = 0
 		self.color = COLOR_PLAYER
+		self.can_jump = False  # Can jump when on a platform
+		self.prev_up_pressed = False  # Track previous frame's UP key state
+		self.on_platform = False  # Track if player is on a platform this frame
 	
 	@property
 	def rect(self):
@@ -81,12 +85,21 @@ class Player:
 			ax += 1
 		self.vx = ax * PLAYER_MOVE_SPEED
 		
+		# Jump on UP key press (not held)
+		up_pressed = keys[pygame.K_UP] or keys[pygame.K_w] or keys[pygame.K_SPACE]
+		if up_pressed and not self.prev_up_pressed and self.can_jump:
+			self.jump()
+			self.can_jump = False
+		self.prev_up_pressed = up_pressed
+		
 		# Update position
 		self.x += self.vx * dt
 		self.y += self.vy * dt
 		
-		# Apply gravity
-		self.vy += GRAVITY * dt
+		# Apply gravity only when not on a platform or when already falling
+		# (gravity applies while jumping/falling, not while standing on platform)
+		if not self.on_platform or self.vy > 0:
+			self.vy += GRAVITY * dt
 		
 		# Wrap horizontally (screen edges)
 		if self.x < -self.radius:
@@ -119,14 +132,23 @@ class Platform:
 		self.moving = moving
 		self.dir = 1 if random.random() < 0.5 else -1
 		self.speed = random.uniform(MOVING_PLATFORM_SPEED_MIN, MOVING_PLATFORM_SPEED_MAX) if moving else 0
+		
+		# Lifetime tracking
+		self.landed_time = None  # When player landed on this platform
+		self.is_active = True  # Platform is still visible/active
 	
 	@property
 	def rect(self):
 		"""Bounding rectangle for collision detection."""
 		return pygame.Rect(self.x, self.y, self.w, self.h)
 	
+	def land(self):
+		"""Called when player lands on this platform. Only starts fading once."""
+		if self.landed_time is None:
+			self.landed_time = 0  # Start fading timer only on first landing
+	
 	def update(self, dt):
-		"""Update platform position if moving."""
+		"""Update platform position if moving, and fade if landed on."""
 		if self.moving:
 			self.x += self.dir * self.speed * dt
 			# Bounce off screen edges
@@ -136,44 +158,76 @@ class Platform:
 			elif self.x + self.w > WINDOW_WIDTH:
 				self.x = WINDOW_WIDTH - self.w
 				self.dir *= -1
+		
+		# Update fade timer
+		if self.landed_time is not None:
+			self.landed_time += dt
+			if self.landed_time >= PLATFORM_FADE_DURATION:
+				self.is_active = False
+	
+	def get_alpha(self):
+		"""Return the alpha value (0-255) for drawing."""
+		if self.landed_time is None:
+			return 255
+		
+		# Fade from 255 to 0 over PLATFORM_FADE_DURATION seconds
+		alpha = 255 * (1 - self.landed_time / PLATFORM_FADE_DURATION)
+		return max(0, int(alpha))
 	
 	def draw(self, surface):
-		"""Draw the platform as a rounded rectangle."""
-		pygame.draw.rect(surface, self.color, self.rect, border_radius=4)
+		"""Draw the platform as a rounded rectangle with fading."""
+		if not self.is_active:
+			return
+		
+		alpha = self.get_alpha()
+		if alpha <= 0:
+			return
+		
+		# Create a surface with per-pixel alpha for fading
+		platform_surf = pygame.Surface((self.w, self.h), pygame.SRCALPHA)
+		color_with_alpha = (*self.color, alpha)
+		pygame.draw.rect(platform_surf, color_with_alpha, (0, 0, self.w, self.h), border_radius=4)
+		surface.blit(platform_surf, (self.x, self.y))
 
 
 # ============================================================================
 # COLLISION DETECTION
 # ============================================================================
 
-def check_platform_collision(player, platforms, prev_x, prev_y):
+def check_if_on_platform(player, platforms):
 	"""
-	Detect collision between player and platforms.
-	Returns the platform collided with, or None.
-	Only collides when player is falling downward.
+	Check if player is currently resting on a platform.
+	Returns the platform the player is on, or None.
+	Only detects platforms when player is falling or stationary (not jumping upward).
+	Also detects if player is stuck inside platform (emergency case).
 	"""
-	if player.vy <= 0:
+	# Only detect platform contact when falling or stationary (vy >= 0)
+	if player.vy < 0:
 		return None
 	
 	closest_platform = None
 	closest_distance = float('inf')
 	
-	# Create a rect for the player's previous position
-	prev_rect = pygame.Rect(
-		prev_x - player.radius,
-		prev_y - player.radius,
-		player.radius * 2,
-		player.radius * 2
-	)
-	
 	for platform in platforms:
-		# Detect fresh collision: wasn't colliding before, but is now
-		if not prev_rect.colliderect(platform.rect) and player.rect.colliderect(platform.rect):
-			# Find the closest platform (in case of overlap)
-			distance = player.y + player.radius - platform.y
-			if distance < closest_distance:
-				closest_distance = distance
-				closest_platform = platform
+		if not platform.is_active:
+			continue
+		
+		# Check if player's bounding box overlaps with platform horizontally
+		if player.rect.colliderect(platform.rect):
+			# Check if player is above or on the platform (player's bottom near platform's top)
+			player_bottom = player.y + player.radius
+			platform_top = platform.y
+			
+			# Normal case: player is on top of platform
+			if player_bottom >= platform_top - 2 and player.y < platform.y + platform.h:
+				distance = player_bottom - platform_top
+				if distance < closest_distance:
+					closest_distance = distance
+					closest_platform = platform
+			# Emergency case: if player is stuck inside platform, snap them on top
+			elif player.y + player.radius > platform.y and player.y < platform.y + platform.h:
+				player.y = platform.y - player.radius
+				return platform
 	
 	return closest_platform
 
@@ -278,11 +332,19 @@ class Game:
 		for platform in self.platforms:
 			platform.update(dt)
 		
-		# Handle collision
-		collided_platform = check_platform_collision(self.player, self.platforms, prev_x, prev_y)
-		if collided_platform:
-			self.player.y = collided_platform.y - self.player.radius
-			self.player.jump()
+		# Reset jump ability each frame, only set if colliding with platform
+		self.player.can_jump = False
+		
+		# Reset platform state each frame
+		self.player.on_platform = False
+		
+		# Check if player is on a platform
+		platform_below = check_if_on_platform(self.player, self.platforms)
+		if platform_below:
+			self.player.on_platform = True
+			self.player.vy = 0  # Stop velocity when on platform (gravity won't apply while on platform)
+			self.player.can_jump = True  # Allow player to jump
+			platform_below.land()  # Start fading this platform
 		
 		# Handle scrolling
 		if self.player.y < SCROLL_THRESHOLD:
@@ -292,8 +354,8 @@ class Game:
 				platform.y += dy
 			self.score += int(dy)
 		
-		# Remove off-screen platforms
-		self.platforms = [p for p in self.platforms if p.y < WINDOW_HEIGHT + 50]
+		# Remove off-screen or faded platforms
+		self.platforms = [p for p in self.platforms if p.y < WINDOW_HEIGHT + 50 and p.is_active]
 		
 		# Generate new platforms
 		generate_new_platforms(self.platforms)
