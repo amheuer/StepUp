@@ -1,226 +1,358 @@
+"""
+StepUp: A minimal Doodle Jump clone using Pygame.
+- Player is a circle
+- Platforms are rectangles
+- No external assets required
+"""
+
 import pygame
 import random
 import sys
 
 
-# Simple Doodle Jump clone using Pygame
-# - Player is a circle
-# - Platforms are rectangles
-# - No external assets required
+# ============================================================================
+# CONSTANTS
+# ============================================================================
 
-
-WIDTH, HEIGHT = 400, 600
+# Window
+WINDOW_WIDTH = 400
+WINDOW_HEIGHT = 600
+WINDOW_TITLE = "StepUp"
 FPS = 60
 
+# Physics
+GRAVITY = 800
+JUMP_STRENGTH = 420
+PLAYER_MOVE_SPEED = 200
+PLAYER_RADIUS = 16
+
+# Platform
+PLATFORM_HEIGHT = 12
+PLATFORM_BASE_WIDTH = 60
+MOVING_PLATFORM_CHANCE = 0.12
+MOVING_PLATFORM_SPEED_MIN = 30
+MOVING_PLATFORM_SPEED_MAX = 70
+
+# Scroll
+SCROLL_THRESHOLD = WINDOW_HEIGHT * 0.4
+
+# Rendering
+COLOR_BG = (15, 18, 30)
+COLOR_PLAYER = (30, 120, 200)
+COLOR_PLATFORM = (50, 200, 110)
+COLOR_STAR = (200, 200, 220)
+COLOR_TEXT = (230, 230, 230)
+COLOR_TEXT_SECONDARY = (200, 200, 200)
+COLOR_GAME_OVER = (255, 200, 200)
+
+
+# ============================================================================
+# PLAYER CLASS
+# ============================================================================
 
 class Player:
-	def __init__(self, x, y):
+	"""Represents the jumping player character."""
+	
+	def __init__(self, x, y, radius=PLAYER_RADIUS):
 		self.x = x
 		self.y = y
-		self.radius = 16
+		self.radius = radius
 		self.vx = 0
 		self.vy = 0
-		self.color = (30, 120, 200)
-
+		self.color = COLOR_PLAYER
+	
 	@property
 	def rect(self):
-		return pygame.Rect(self.x - self.radius, self.y - self.radius, self.radius * 2, self.radius * 2)
-
+		"""Bounding rectangle for collision detection."""
+		return pygame.Rect(
+			self.x - self.radius,
+			self.y - self.radius,
+			self.radius * 2,
+			self.radius * 2
+		)
+	
 	def update(self, dt, keys):
-		# Horizontal movement
-		speed = 200
+		"""Update player position and velocity."""
+		# Horizontal movement based on input
 		ax = 0
 		if keys[pygame.K_LEFT] or keys[pygame.K_a]:
 			ax -= 1
 		if keys[pygame.K_RIGHT] or keys[pygame.K_d]:
 			ax += 1
-		self.vx = ax * speed
-
-		# Apply velocities
+		self.vx = ax * PLAYER_MOVE_SPEED
+		
+		# Update position
 		self.x += self.vx * dt
 		self.y += self.vy * dt
-
-		# Gravity
-		self.vy += 800 * dt
-
-		# Wrap around horizontally
+		
+		# Apply gravity
+		self.vy += GRAVITY * dt
+		
+		# Wrap horizontally (screen edges)
 		if self.x < -self.radius:
-			self.x = WIDTH + self.radius
-		elif self.x > WIDTH + self.radius:
+			self.x = WINDOW_WIDTH + self.radius
+		elif self.x > WINDOW_WIDTH + self.radius:
 			self.x = -self.radius
-
-	def jump(self, strength=420):
+	
+	def jump(self, strength=JUMP_STRENGTH):
+		"""Apply a jump impulse."""
 		self.vy = -strength
+	
+	def draw(self, surface):
+		"""Draw the player as a circle."""
+		pygame.draw.circle(surface, self.color, (int(self.x), int(self.y)), self.radius)
 
-	def draw(self, surf):
-		pygame.draw.circle(surf, self.color, (int(self.x), int(self.y)), self.radius)
 
+# ============================================================================
+# PLATFORM CLASS
+# ============================================================================
 
 class Platform:
-	def __init__(self, x, y, w=60, h=12, moving=False):
+	"""Represents a platform the player can jump on."""
+	
+	def __init__(self, x, y, width=PLATFORM_BASE_WIDTH, height=PLATFORM_HEIGHT, moving=False):
 		self.x = x
 		self.y = y
-		self.w = w
-		self.h = h
-		self.color = (50, 200, 110)
+		self.w = width
+		self.h = height
+		self.color = COLOR_PLATFORM
 		self.moving = moving
 		self.dir = 1 if random.random() < 0.5 else -1
-		self.speed = random.uniform(30, 70) if moving else 0
-
+		self.speed = random.uniform(MOVING_PLATFORM_SPEED_MIN, MOVING_PLATFORM_SPEED_MAX) if moving else 0
+	
 	@property
 	def rect(self):
+		"""Bounding rectangle for collision detection."""
 		return pygame.Rect(self.x, self.y, self.w, self.h)
-
+	
 	def update(self, dt):
+		"""Update platform position if moving."""
 		if self.moving:
 			self.x += self.dir * self.speed * dt
+			# Bounce off screen edges
 			if self.x < 0:
 				self.x = 0
 				self.dir *= -1
-			elif self.x + self.w > WIDTH:
-				self.x = WIDTH - self.w
+			elif self.x + self.w > WINDOW_WIDTH:
+				self.x = WINDOW_WIDTH - self.w
 				self.dir *= -1
+	
+	def draw(self, surface):
+		"""Draw the platform as a rounded rectangle."""
+		pygame.draw.rect(surface, self.color, self.rect, border_radius=4)
 
-	def draw(self, surf):
-		pygame.draw.rect(surf, self.color, self.rect, border_radius=4)
 
+# ============================================================================
+# COLLISION DETECTION
+# ============================================================================
+
+def check_platform_collision(player, platforms, prev_x, prev_y):
+	"""
+	Detect collision between player and platforms.
+	Returns the platform collided with, or None.
+	Only collides when player is falling downward.
+	"""
+	if player.vy <= 0:
+		return None
+	
+	closest_platform = None
+	closest_distance = float('inf')
+	
+	# Create a rect for the player's previous position
+	prev_rect = pygame.Rect(
+		prev_x - player.radius,
+		prev_y - player.radius,
+		player.radius * 2,
+		player.radius * 2
+	)
+	
+	for platform in platforms:
+		# Detect fresh collision: wasn't colliding before, but is now
+		if not prev_rect.colliderect(platform.rect) and player.rect.colliderect(platform.rect):
+			# Find the closest platform (in case of overlap)
+			distance = player.y + player.radius - platform.y
+			if distance < closest_distance:
+				closest_distance = distance
+				closest_platform = platform
+	
+	return closest_platform
+
+
+# ============================================================================
+# PLATFORM GENERATION
+# ============================================================================
 
 def create_initial_platforms():
+	"""Generate the initial set of platforms."""
 	platforms = []
-	# base platform under the player
-	platforms.append(Platform(WIDTH // 2 - 40, HEIGHT - 40, w=80, h=14))
-	# random platforms
-	y = HEIGHT - 120
+	
+	# Base platform at the bottom
+	platforms.append(Platform(
+		WINDOW_WIDTH // 2 - 40,
+		WINDOW_HEIGHT - 40,
+		width=80,
+		height=14
+	))
+	
+	# Generate platforms going upward
+	y = WINDOW_HEIGHT - 120
 	while y > -2000:
-		x = random.randint(0, WIDTH - 60)
-		platforms.append(Platform(x, y, w=random.randint(50, 80), h=12, moving=(random.random() < 0.12)))
+		x = random.randint(0, WINDOW_WIDTH - 60)
+		is_moving = random.random() < MOVING_PLATFORM_CHANCE
+		platforms.append(Platform(
+			x, y,
+			width=random.randint(50, 80),
+			height=12,
+			moving=is_moving
+		))
 		y -= random.randint(60, 120)
 		if len(platforms) > 40:
 			break
+	
 	return platforms
 
 
-def main():
-	pygame.init()
-	screen = pygame.display.set_mode((WIDTH, HEIGHT))
-	pygame.display.set_caption("StepUp")
-	clock = pygame.time.Clock()
-	font = pygame.font.SysFont(None, 32)
+def generate_new_platforms(platforms):
+	"""Generate new platforms above existing ones."""
+	while len(platforms) < 10:
+		top_y = min((p.y for p in platforms), default=0)
+		new_y = top_y - random.randint(60, 140)
+		new_x = random.randint(0, WINDOW_WIDTH - 60)
+		is_moving = random.random() < MOVING_PLATFORM_CHANCE
+		platforms.append(Platform(
+			new_x, new_y,
+			width=random.randint(50, 90),
+			moving=is_moving
+		))
 
-	player = Player(WIDTH // 2, HEIGHT - 80)
-	platforms = create_initial_platforms()
 
-	score = 0
-	high_score = 0
+# ============================================================================
+# GAME CLASS
+# ============================================================================
 
-	running = True
-	game_over = False
-
-	while running:
-		dt = clock.tick(FPS) / 1000.0
+class Game:
+	"""Main game manager."""
+	
+	def __init__(self):
+		pygame.init()
+		self.screen = pygame.display.set_mode((WINDOW_WIDTH, WINDOW_HEIGHT))
+		pygame.display.set_caption(WINDOW_TITLE)
+		self.clock = pygame.time.Clock()
+		self.font = pygame.font.SysFont(None, 32)
+		
+		self.reset()
+		self.running = True
+		self.game_over = False
+	
+	def reset(self):
+		"""Reset game state for a new game."""
+		self.player = Player(WINDOW_WIDTH // 2, WINDOW_HEIGHT - 80)
+		self.platforms = create_initial_platforms()
+		self.score = 0
+	
+	def handle_events(self):
+		"""Process input events."""
 		for event in pygame.event.get():
 			if event.type == pygame.QUIT:
-				running = False
-			if event.type == pygame.KEYDOWN:
+				self.running = False
+			elif event.type == pygame.KEYDOWN:
 				if event.key == pygame.K_ESCAPE:
-					running = False
-				if game_over and event.key == pygame.K_r:
-					# restart
-					player = Player(WIDTH // 2, HEIGHT - 80)
-					platforms = create_initial_platforms()
-					score = 0
-					game_over = False
-
-		if not game_over:
-			keys = pygame.key.get_pressed()
-			
-			# Store previous position for collision detection
-			prev_y = player.y
-			prev_x = player.x
-			
-			player.update(dt, keys)
-
-			# Update platforms
-			for p in platforms:
-				p.update(dt)
-
-			# Collision: only when falling and moving downward
-			if player.vy > 0:
-				closest_platform = None
-				closest_distance = float('inf')
-				
-				for p in platforms:
-					# Create a rect for the player's previous position
-					prev_rect = pygame.Rect(prev_x - player.radius, prev_y - player.radius, 
-											player.radius * 2, player.radius * 2)
-					
-					# Check if player was NOT colliding before but IS colliding now
-					if not prev_rect.colliderect(p.rect) and player.rect.colliderect(p.rect):
-						# This is a fresh collision - find the closest platform
-						distance = player.y + player.radius - p.y
-						if distance < closest_distance:
-							closest_distance = distance
-							closest_platform = p
-				
-				if closest_platform:
-					player.y = closest_platform.y - player.radius
-					player.jump()
-
-			# Scroll: if player goes above threshold, move everything down
-			scroll_threshold = HEIGHT * 0.4
-			if player.y < scroll_threshold:
-				dy = scroll_threshold - player.y
-				player.y = scroll_threshold
-				# move platforms down
-				for p in platforms:
-					p.y += dy
-				score += int(dy)
-
-			# Remove platforms that are below the screen
-			platforms = [p for p in platforms if p.y < HEIGHT + 50]
-
-			# Generate new platforms above
-			while len(platforms) < 10:
-				top_y = min((p.y for p in platforms), default=0)
-				new_y = top_y - random.randint(60, 140)
-				new_x = random.randint(0, WIDTH - 60)
-				platforms.append(Platform(new_x, new_y, w=random.randint(50, 90), moving=(random.random() < 0.12)))
-
-			# Game over if player falls below bottom
-			if player.y - player.radius > HEIGHT:
-				game_over = True
-				if score > high_score:
-					high_score = score
-
-		# Drawing
-		screen.fill((15, 18, 30))
-
-		# Parallax-ish stars: simple background dots based on score
+					self.running = False
+				elif self.game_over and event.key == pygame.K_r:
+					self.reset()
+					self.game_over = False
+	
+	def update(self, dt):
+		"""Update game state."""
+		if self.game_over:
+			return
+		
+		keys = pygame.key.get_pressed()
+		
+		# Store previous position for collision detection
+		prev_x = self.player.x
+		prev_y = self.player.y
+		
+		# Update entities
+		self.player.update(dt, keys)
+		for platform in self.platforms:
+			platform.update(dt)
+		
+		# Handle collision
+		collided_platform = check_platform_collision(self.player, self.platforms, prev_x, prev_y)
+		if collided_platform:
+			self.player.y = collided_platform.y - self.player.radius
+			self.player.jump()
+		
+		# Handle scrolling
+		if self.player.y < SCROLL_THRESHOLD:
+			dy = SCROLL_THRESHOLD - self.player.y
+			self.player.y = SCROLL_THRESHOLD
+			for platform in self.platforms:
+				platform.y += dy
+			self.score += int(dy)
+		
+		# Remove off-screen platforms
+		self.platforms = [p for p in self.platforms if p.y < WINDOW_HEIGHT + 50]
+		
+		# Generate new platforms
+		generate_new_platforms(self.platforms)
+		
+		# Check game over condition
+		if self.player.y - self.player.radius > WINDOW_HEIGHT:
+			self.game_over = True
+	
+	def draw_background(self):
+		"""Draw background with parallax stars."""
+		self.screen.fill(COLOR_BG)
+		
 		for i in range(30):
-			sx = (i * 37 + score) % WIDTH
-			sy = (i * 53 + score // 3) % HEIGHT
-			screen.set_at((sx, sy), (200, 200, 220))
-
-		for p in platforms:
-			p.draw(screen)
-
-		player.draw(screen)
-
-		score_surf = font.render(f"Score: {score}", True, (230, 230, 230))
-		screen.blit(score_surf, (8, 8))
-
-		hs_surf = font.render(f"High: {high_score}", True, (200, 200, 200))
-		screen.blit(hs_surf, (WIDTH - hs_surf.get_width() - 8, 8))
-
-		if game_over:
-			over_surf = font.render("Game Over - Press R to restart", True, (255, 200, 200))
-			screen.blit(over_surf, ((WIDTH - over_surf.get_width()) // 2, HEIGHT // 2 - 20))
-
+			sx = (i * 37 + self.score) % WINDOW_WIDTH
+			sy = (i * 53 + self.score // 3) % WINDOW_HEIGHT
+			self.screen.set_at((sx, sy), COLOR_STAR)
+	
+	def draw_ui(self):
+		"""Draw score and game over text."""
+		score_text = self.font.render(f"Score: {self.score}", True, COLOR_TEXT)
+		self.screen.blit(score_text, (8, 8))
+		
+		if self.game_over:
+			game_over_text = self.font.render("Game Over - Press R to restart", True, COLOR_GAME_OVER)
+			x = (WINDOW_WIDTH - game_over_text.get_width()) // 2
+			y = WINDOW_HEIGHT // 2 - 20
+			self.screen.blit(game_over_text, (x, y))
+	
+	def draw(self):
+		"""Render the game state."""
+		self.draw_background()
+		
+		# Draw platforms and player
+		for platform in self.platforms:
+			platform.draw(self.screen)
+		self.player.draw(self.screen)
+		
+		# Draw UI
+		self.draw_ui()
+		
 		pygame.display.flip()
+	
+	def run(self):
+		"""Main game loop."""
+		while self.running:
+			dt = self.clock.tick(FPS) / 1000.0
+			
+			self.handle_events()
+			self.update(dt)
+			self.draw()
+		
+		pygame.quit()
+		sys.exit()
 
-	pygame.quit()
-	sys.exit()
 
+# ============================================================================
+# ENTRY POINT
+# ============================================================================
 
 if __name__ == '__main__':
-	main()
+	game = Game()
+	game.run()
