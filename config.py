@@ -1,5 +1,7 @@
 """Shared configuration and constants for StepUp."""
 
+from enum import Enum
+
 # Window
 WINDOW_WIDTH = 400
 WINDOW_HEIGHT = 600
@@ -34,13 +36,22 @@ COLOR_PLATFORM_FRAGILE = (220, 70, 70)
 COLOR_STAR = (200, 200, 220)
 COLOR_TEXT = (230, 230, 230)
 COLOR_TEXT_SECONDARY = (200, 200, 200)
-COLOR_GAME_OVER = (255, 200, 200)
-COLOR_BARS = (215, 240, 255)
+COLOR_GAME_OVER = (0, 0, 0)
+COLOR_BARS = (255, 210, 225)
 COLOR_BARS_TEXT = (20, 35, 55)
-UI_FONT_SIZE = 52
+UI_FONT_SIZE = 5
+
+# Intensity / Calories
+class Intensity(Enum):
+	HIGH = 10
+	MEDIUM = 8
+	LOW = 5
+
+INTENSITY = Intensity.MEDIUM
 
 # Coins
 COIN_RADIUS = 18
 COIN_COLOR = (240, 200, 60)
 COIN_VALUE = 50
 COIN_SPAWN_CHANCE = 0.18
+from enum import Enum
