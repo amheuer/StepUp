@@ -13,6 +13,10 @@ from pathlib import Path
 from PIL import Image as PilImage, ImageDraw, ImageFont
 from ultralytics import YOLO, SAM
 
+# Webcam selection (like cv_tester)
+USE_USB_WEBCAM = True
+WEBCAM_INDEX = 2
+
 # Detect screen resolution once at module load
 try:
     import tkinter as _tk
@@ -65,9 +69,15 @@ def _get_text_size_pil(text, font_size):
     return bbox[2] - bbox[0], bbox[3] - bbox[1]
 
 
+def _resolve_webcam_index(webcam_index=None):
+    if webcam_index is not None:
+        return webcam_index
+    return WEBCAM_INDEX if USE_USB_WEBCAM else 0
+
+
 def capture_from_webcam(save_path: str = "capture.jpg", countdown: int = 10,
                         reference_image: str = None, pose_name: str = None,
-                        ref_scale: float = 1.0) -> str:
+                        ref_scale: float = 1.0, webcam_index: int | None = None) -> str:
     """
     Open the webcam, show a live preview with a countdown timer,
     then capture and save a frame.
@@ -86,7 +96,7 @@ def capture_from_webcam(save_path: str = "capture.jpg", countdown: int = 10,
     Returns:
         The path to the saved image.
     """
-    cap = cv2.VideoCapture(0)
+    cap = cv2.VideoCapture(_resolve_webcam_index(webcam_index))
     if not cap.isOpened():
         raise RuntimeError("Could not open webcam.")
 
@@ -247,17 +257,19 @@ POSES = [
 ]
 
 
-def capture_all_poses(countdown: int = 5) -> list:
+def capture_all_poses(countdown: int = 5, webcam_index: int | None = None) -> list:
     """Capture 3 images in sequence: stand, jump, and left poses.
 
     Uses a single fullscreen window and webcam for all poses.
     """
-    results, window_name, screen_w, screen_h = _capture_poses_single_window(POSES, countdown)
+    results, window_name, screen_w, screen_h = _capture_poses_single_window(
+        POSES, countdown, webcam_index=webcam_index
+    )
     _fade_out_window(window_name, screen_w, screen_h, duration=0.4)
     return results
 
 
-def _capture_poses_single_window(poses, countdown, save_path_override=None):
+def _capture_poses_single_window(poses, countdown, save_path_override=None, webcam_index: int | None = None):
     """Capture multiple poses using one persistent fullscreen window.
 
     Args:
@@ -271,7 +283,7 @@ def _capture_poses_single_window(poses, countdown, save_path_override=None):
         results is a list of (pose_name, saved_path) tuples.
         The window is left open so the caller can show status/fade.
     """
-    cap = cv2.VideoCapture(0)
+    cap = cv2.VideoCapture(_resolve_webcam_index(webcam_index))
     if not cap.isOpened():
         raise RuntimeError("Could not open webcam.")
 
@@ -672,6 +684,7 @@ def capture_and_process_for_user(
     sam_model: str = "sam2_b.pt",
     conf_threshold: float = 0.25,
     grid_size: int = 40,
+    webcam_index: int | None = None,
 ) -> bool:
     """
     Run the full capture → segment → pixelate pipeline for a player.
@@ -705,6 +718,7 @@ def capture_and_process_for_user(
         POSES,
         countdown,
         save_path_override=lambda pose: str(tmp_dir / f"capture_{pose['name'].lower()}.png"),
+        webcam_index=webcam_index,
     )
 
     # Show processing status on the same fullscreen window
@@ -781,6 +795,8 @@ if __name__ == "__main__":
                         help="YOLO model name (default: yolo11n.pt)")
     parser.add_argument("--sam-model", default="sam2_b.pt",
                         help="SAM model name (default: sam2_b.pt)")
+    parser.add_argument("--webcam-index", type=int, default=None,
+                        help="Webcam index to use (default: 0 or WEBCAM_INDEX)")
     parser.add_argument("--conf", type=float, default=0.25,
                         help="YOLO confidence threshold (default: 0.25)")
     parser.add_argument("--output-dir", default="output",
@@ -792,7 +808,7 @@ if __name__ == "__main__":
     # Determine image source
     if args.capture_poses:
         # Capture all 3 poses then process each
-        captured = capture_all_poses(countdown=10)
+        captured = capture_all_poses(countdown=10, webcam_index=args.webcam_index)
         for _name, img_path in captured:
             run_yolo_sam_pipeline(
                 image_path=img_path,
@@ -804,7 +820,11 @@ if __name__ == "__main__":
             )
     else:
         if args.webcam or args.image is None:
-            image_path = capture_from_webcam(save_path="capture.jpg", countdown=10)
+            image_path = capture_from_webcam(
+                save_path="capture.jpg",
+                countdown=10,
+                webcam_index=args.webcam_index,
+            )
         else:
             image_path = args.image
 
