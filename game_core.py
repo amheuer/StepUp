@@ -960,10 +960,6 @@ class Game:
 
 		jump_allowed = True
 
-		if self.player.y < prev_y:
-			pixels_up = (prev_y - self.player.y) / 2
-			meters_per_pixel = PLAYER_HEIGHT_METERS / (PLAYER_RADIUS * 2)
-			self.height_jumped += pixels_up * meters_per_pixel
 		for platform in self.platforms:
 			platform.update(dt)
 			if play_sfx and platform.just_broke:
@@ -1026,6 +1022,11 @@ class Game:
 			if max_x < min_x:
 				max_x = min_x
 			self.player.x = max(min_x, min(max_x, self.player.x))
+
+		if self.player.y < prev_y:
+			pixels_up = (prev_y - self.player.y) / 2
+			meters_per_pixel = PLAYER_HEIGHT_METERS / (PLAYER_RADIUS * 2)
+			self.height_jumped += pixels_up * meters_per_pixel
 
 		# ── Tutorial-specific vs normal game logic ──────────────────
 		if self.in_tutorial:
