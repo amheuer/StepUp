@@ -166,7 +166,10 @@ class Game:
 		self.hover_pause_index = None
 		self.hover_game_over = False
 		self.signin_mode = False
+		self.signin_pick_intensity = False
 		self.username_input = ""
+		self.pending_username = ""
+		self.pending_intensity = cfg.INTENSITY
 		self.current_user = None
 		self.users = self._load_users()
 		self.user_save_timer = 0.0
@@ -234,6 +237,26 @@ class Game:
 		"""Return calories per minute based on intensity."""
 		return cfg.INTENSITY.value
 
+	def _apply_intensity(self, intensity):
+		cfg.INTENSITY = intensity
+		for platform in self.platforms:
+			if platform.kind == "fragile":
+				platform.fade_duration = cfg.get_fragile_fade_duration()
+			else:
+				platform.fade_duration = cfg.get_platform_fade_duration()
+
+	def _cycle_intensity(self, step):
+		order = [cfg.Intensity.LOW, cfg.Intensity.MEDIUM, cfg.Intensity.HIGH]
+		if cfg.INTENSITY not in order:
+			cfg.INTENSITY = cfg.Intensity.MEDIUM
+		idx = order.index(cfg.INTENSITY)
+		next_intensity = order[(idx + step) % len(order)]
+		self._apply_intensity(next_intensity)
+		if self.current_user:
+			user = self.users.get(self.current_user)
+			if user is not None:
+				user["intensity"] = cfg.INTENSITY.name
+
 	def _load_users(self):
 		if not USERS_PATH.exists():
 			return {}
@@ -261,7 +284,10 @@ class Game:
 				"max_shuffle_speed_fps": 0.0,
 				"avg_shuffle_speed_fps": 0.0,
 				"pixels_per_foot": None,
+				"intensity": cfg.INTENSITY.name,
 			}
+		if "intensity" not in self.users[key]:
+			self.users[key]["intensity"] = cfg.INTENSITY.name
 		self.current_user = key
 		self.pixels_per_foot = self.users[key].get("pixels_per_foot")
 		if self.pixels_per_foot:
@@ -809,13 +835,55 @@ class Game:
 				continue
 			elif event.type == pygame.KEYDOWN:
 				if self.signin_mode:
+					if self.signin_pick_intensity:
+						if event.key in (pygame.K_LEFT, pygame.K_a):
+							order = [cfg.Intensity.LOW, cfg.Intensity.MEDIUM, cfg.Intensity.HIGH]
+							idx = order.index(self.pending_intensity)
+							self.pending_intensity = order[(idx - 1) % len(order)]
+						elif event.key in (pygame.K_RIGHT, pygame.K_d):
+							order = [cfg.Intensity.LOW, cfg.Intensity.MEDIUM, cfg.Intensity.HIGH]
+							idx = order.index(self.pending_intensity)
+							self.pending_intensity = order[(idx + 1) % len(order)]
+						elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
+							if self.pending_username:
+								self._ensure_user(self.pending_username)
+								user = self.users.get(self.current_user)
+								if user is not None:
+									user["intensity"] = self.pending_intensity.name
+								self._apply_intensity(self.pending_intensity)
+								self.pending_username = ""
+								self.pending_intensity = cfg.INTENSITY
+								self.signin_pick_intensity = False
+								self.signin_mode = False
+								self._save_users()
+						elif event.key == pygame.K_ESCAPE:
+							self.username_input = self.pending_username
+							self.pending_username = ""
+							self.pending_intensity = cfg.INTENSITY
+							self.signin_pick_intensity = False
+						continue
 					if event.key == pygame.K_RETURN:
 						name = self.username_input.strip().upper()
 						if name:
-							self._ensure_user(name)
-							self.username_input = ""
-							self.signin_mode = False
-							self._save_users()
+							existed = name in self.users
+							if existed:
+								self._ensure_user(name)
+								user = self.users.get(self.current_user)
+								if user is not None and "intensity" in user:
+									try:
+										self._apply_intensity(cfg.Intensity[user["intensity"]])
+									except Exception:
+										pass
+								self.username_input = ""
+								self.pending_username = ""
+								self.pending_intensity = cfg.INTENSITY
+								self.signin_mode = False
+								self._save_users()
+							else:
+								self.pending_username = name
+								self.pending_intensity = cfg.INTENSITY
+								self.signin_pick_intensity = True
+								self.username_input = ""
 					elif event.key == pygame.K_ESCAPE:
 						self.username_input = ""
 						self.signin_mode = False
@@ -1603,12 +1671,34 @@ class Game:
 
 		# Sign-in prompt / status
 		if self.signin_mode:
-			label = f"USERNAME: {self.username_input}_"
-			prompt = self.subtitle_font.render(label, True, COLOR_BARS_TEXT)
-			self.screen.blit(
-				prompt,
-				((screen_w - prompt.get_width()) // 2, ty + text.get_height() + 16),
-			)
+			base_y = ty + text.get_height() + 16
+			line_h = self.subtitle_font.get_height()
+			gap = 6
+			if self.signin_pick_intensity:
+				name_line = f"USERNAME: {self.pending_username}"
+				intensity_line = f"INTENSITY: {self.pending_intensity.name}"
+				prompt = self.subtitle_font.render(name_line, True, COLOR_BARS_TEXT)
+				self.screen.blit(
+					prompt,
+					((screen_w - prompt.get_width()) // 2, base_y),
+				)
+				choice = self.subtitle_font.render(intensity_line, True, COLOR_BARS_TEXT)
+				self.screen.blit(
+					choice,
+					((screen_w - choice.get_width()) // 2, base_y + line_h + gap),
+				)
+				hint = self.subtitle_font.render("USE LEFT/RIGHT, ENTER TO CONFIRM", True, COLOR_BARS_TEXT)
+				self.screen.blit(
+					hint,
+					((screen_w - hint.get_width()) // 2, base_y + (line_h + gap) * 2),
+				)
+			else:
+				label = f"USERNAME: {self.username_input}_"
+				prompt = self.subtitle_font.render(label, True, COLOR_BARS_TEXT)
+				self.screen.blit(
+					prompt,
+					((screen_w - prompt.get_width()) // 2, base_y),
+				)
 		elif self.current_user:
 			status = self.subtitle_font.render(
 				f"SIGNED IN: {self.current_user}", True, COLOR_BARS_TEXT

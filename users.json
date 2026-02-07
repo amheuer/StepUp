@@ -7,7 +7,8 @@
   "ME": {
     "highscore": 106,
     "lifetime_calories": 0.30266666666666575,
-    "minutes_played": 0.03783333333333322
+    "minutes_played": 0.03783333333333322,
+    "intensity": "MEDIUM"
   },
   "LA": {
     "highscore": 0,
@@ -298,5 +299,17 @@
     "max_shuffle_speed_fps": 0.0,
     "avg_shuffle_speed_fps": 0.0,
     "pixels_per_foot": 10.521176214913355
+  },
+  "L": {
+    "highscore": 0,
+    "lifetime_calories": 0.0,
+    "minutes_played": 0.0,
+    "balance_ability": 0.0,
+    "max_jump_height_ft": 0.0,
+    "avg_jump_height_ft": 0.0,
+    "max_shuffle_speed_fps": 0.0,
+    "avg_shuffle_speed_fps": 0.0,
+    "pixels_per_foot": null,
+    "intensity": "HIGH"
   }
 }
