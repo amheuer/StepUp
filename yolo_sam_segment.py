@@ -107,15 +107,39 @@ def run_yolo_sam_pipeline(
                     avg_colour = masked_pixels.mean(axis=0).astype(np.uint8)
                     pixelated[y1:y2, x1:x2] = avg_colour
 
-        # Save pixelated isolated person
+        # Save pixelated isolated person with transparent background
         stem = Path(image_path).stem
+
+        # Build an alpha mask: 255 for any grid cell that was filled, 0 elsewhere
+        alpha = np.zeros((h, w), dtype=np.uint8)
+        for row in range(grid_size):
+            for col in range(grid_size):
+                y1 = row * cell_h
+                x1 = col * cell_w
+                y2 = min(y1 + cell_h, h)
+                x2 = min(x1 + cell_w, w)
+                if binary_mask[y1:y2, x1:x2].any():
+                    alpha[y1:y2, x1:x2] = 255
+
+        # Merge BGR + Alpha into a 4-channel BGRA image
+        pixelated_rgba = cv2.merge([pixelated[:, :, 0],
+                                     pixelated[:, :, 1],
+                                     pixelated[:, :, 2],
+                                     alpha])
+
+        # Crop to bounding box of non-transparent pixels
+        ys, xs = np.where(alpha > 0)
+        crop_y1, crop_y2 = ys.min(), ys.max() + 1
+        crop_x1, crop_x2 = xs.min(), xs.max() + 1
+        pixelated_rgba = pixelated_rgba[crop_y1:crop_y2, crop_x1:crop_x2]
+
         out_file = output_path / f"{stem}_pixelated.png"
-        cv2.imwrite(str(out_file), pixelated)
+        cv2.imwrite(str(out_file), pixelated_rgba)
         print(f"[INFO] Saved pixelated mask to: {out_file}")
 
-        # Also save the clean binary mask
+        # Also save the clean binary mask (cropped to same region)
         mask_file = output_path / f"{stem}_mask.png"
-        cv2.imwrite(str(mask_file), binary_mask * 255)
+        cv2.imwrite(str(mask_file), (binary_mask * 255)[crop_y1:crop_y2, crop_x1:crop_x2])
         print(f"[INFO] Saved binary mask to:    {mask_file}")
 
         return pixelated
