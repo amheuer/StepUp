@@ -6,6 +6,8 @@ import pygame
 from config import (
 	COLOR_PLAYER,
 	COLOR_PLATFORM,
+	COLOR_PLATFORM_FRAGILE,
+	FRAGILE_PLATFORM_FADE_DURATION,
 	GRAVITY,
 	JUMP_STRENGTH,
 	MOVING_PLATFORM_SPEED_MAX,
@@ -85,19 +87,23 @@ class Player:
 class Platform:
 	"""Represents a platform the player can jump on."""
 
-	def __init__(self, x, y, width, height, moving=False):
+	def __init__(self, x, y, width, height, kind="normal"):
 		self.x = x
 		self.y = y
 		self.w = width
 		self.h = height
-		self.color = COLOR_PLATFORM
-		self.moving = moving
+		self.kind = kind
+		self.color = COLOR_PLATFORM_FRAGILE if kind == "fragile" else COLOR_PLATFORM
+		self.moving = kind == "moving"
 		self.dir = 1 if random.random() < 0.5 else -1
 		self.vx = 0
 		self.speed = (
 			random.uniform(MOVING_PLATFORM_SPEED_MIN, MOVING_PLATFORM_SPEED_MAX)
-			if moving
+			if self.moving
 			else 0
+		)
+		self.fade_duration = (
+			FRAGILE_PLATFORM_FADE_DURATION if kind == "fragile" else PLATFORM_FADE_DURATION
 		)
 
 		# Lifetime tracking
@@ -131,7 +137,7 @@ class Platform:
 		# Update fade timer
 		if self.landed_time is not None:
 			self.landed_time += dt
-			if self.landed_time >= PLATFORM_FADE_DURATION:
+			if self.landed_time >= self.fade_duration:
 				self.is_active = False
 
 	def get_alpha(self):
@@ -139,8 +145,8 @@ class Platform:
 		if self.landed_time is None:
 			return 255
 
-		# Fade from 255 to 0 over PLATFORM_FADE_DURATION seconds
-		alpha = 255 * (1 - self.landed_time / PLATFORM_FADE_DURATION)
+		# Fade from 255 to 0 over fade_duration seconds
+		alpha = 255 * (1 - self.landed_time / self.fade_duration)
 		return max(0, int(alpha))
 
 	def draw(self, surface):
