@@ -131,7 +131,7 @@ class Game:
 		self.game_over = False
 		self.paused = False
 		self.pause_index = 0
-		self.pause_options = ["RESUME", "MUSIC", "SFX", "INTENSITY", "RESTART", "MAIN MENU", "QUIT"]
+		self.pause_options = ["RESUME", "MUSIC", "SFX", "CONTROL", "INTENSITY", "RESTART", "MAIN MENU", "QUIT"]
 		self.in_menu = True
 		self.in_health = False
 		self.in_tutorial = False
@@ -141,6 +141,7 @@ class Game:
 		self.menu_options = ["PLAY", "HEALTH  INFO", "SIGN IN"]
 		self.menu_option_rects = {}
 		self.signin_rect = None
+		self.control_mode = "CV"
 		self.pause_option_rects = {}
 		self.render_scale = 1.0
 		self.render_offset = (0, 0)
@@ -617,6 +618,8 @@ class Game:
 							for s in self.sfx.values():
 								s.set_volume(self.sfx_volume)
 							self.sfx["coin.wav"].set_volume(min(0.35, self.sfx_volume))
+						elif choice == "CONTROL":
+							self.control_mode = "ARROWS" if self.control_mode == "CV" else "CV"
 						elif choice == "INTENSITY":
 							self._cycle_intensity(-1)
 					elif event.key in (pygame.K_RIGHT, pygame.K_d):
@@ -663,6 +666,8 @@ class Game:
 		play_sfx = self.skip_sfx_frames <= 0
 		if self.skip_sfx_frames > 0:
 			self.skip_sfx_frames -= 1
+		keys = pygame.key.get_pressed()
+
 
 		# Update CV state
 		if self.cv:
@@ -679,21 +684,31 @@ class Game:
 				has_person=False,
 			)
 
-		if self.cv_state.jump_vector is not None:
-			self.last_jump_vector = self.cv_state.jump_vector
-		jump_vector = None
-		if self.cv_state.jump_active and self.last_jump_vector is not None:
-			jump_vector = self._map_jump_vector(self.last_jump_vector)
-
+		if self.control_mode == "CV":
+			if self.cv_state.jump_vector is not None:
+				self.last_jump_vector = self.cv_state.jump_vector
+			jump_vector = None
+			if self.cv_state.jump_active and self.last_jump_vector is not None:
+				jump_vector = self._map_jump_vector(self.last_jump_vector)
+		else:
+			jump_vector = None
 		if self.player.ignore_platform_timer > 0:
 			self.player.ignore_platform_timer = max(0.0, self.player.ignore_platform_timer - dt)
 
 		move_vx = 0.0
-		if self.cv_state.center_velocity is not None:
-			move_vx = self.cv_state.center_velocity[0] * CV_MOVE_X_SCALE
-			if abs(move_vx) < CV_MOVE_DEADZONE:
-				move_vx = 0.0
-		move_vx = max(-PLAYER_MAX_X_SPEED, min(PLAYER_MAX_X_SPEED, move_vx))
+		if self.control_mode == "CV":
+			if self.cv_state.center_velocity is not None:
+				move_vx = self.cv_state.center_velocity[0] * CV_MOVE_X_SCALE
+				if abs(move_vx) < CV_MOVE_DEADZONE:
+					move_vx = 0.0
+			move_vx = max(-PLAYER_MAX_X_SPEED, min(PLAYER_MAX_X_SPEED, move_vx))
+			jump_active = self.cv_state.jump_active
+		else:
+			if keys[pygame.K_LEFT] or keys[pygame.K_a]:
+				move_vx = -PLAYER_MAX_X_SPEED
+			if keys[pygame.K_RIGHT] or keys[pygame.K_d]:
+				move_vx = PLAYER_MAX_X_SPEED
+			jump_active = keys[pygame.K_UP] or keys[pygame.K_w] or keys[pygame.K_SPACE]
 
 		jump_allowed = True
 
@@ -724,7 +739,7 @@ class Game:
 			self.player.y = platform_below.rect.y - self.player.radius
 			if self.player.time_since_jump is None or self.player.time_since_jump >= JUMP_REARM_TIME:
 				self.player.can_jump = True  # Allow player to jump
-				if not self.cv_state.jump_active:
+				if not jump_active:
 					self.prev_jump_active = False
 			self.player.x += platform_below.vx * dt
 			min_x = platform_below.x + self.player.radius
@@ -745,7 +760,7 @@ class Game:
 		else:
 			self.landing_stick_timer = 0.0
 
-		jump_triggered = self.cv_state.jump_active and not self.prev_jump_active
+		jump_triggered = jump_active and not self.prev_jump_active
 		self.last_jump_triggered = jump_triggered
 
 
@@ -847,7 +862,7 @@ class Game:
 		if self.jump_flash_timer > 0:
 			self.jump_flash_timer = max(0.0, self.jump_flash_timer - dt)
 
-		self.prev_jump_active = self.cv_state.jump_active
+		self.prev_jump_active = jump_active
 
 	def draw_background(self):
 		"""Draw layered background with parallax bubbles."""
@@ -905,6 +920,8 @@ class Game:
 					lines.append(f"MUSIC: {int(self.music_volume * 100)}%")
 				elif opt == "SFX":
 					lines.append(f"SFX: {int(self.sfx_volume * 100)}%")
+				elif opt == "CONTROL":
+					lines.append(f"CONTROL: {self.control_mode}")
 				elif opt == "INTENSITY":
 					lines.append(f"INTENSITY: {cfg.INTENSITY.name}")
 				else:

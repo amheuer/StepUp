@@ -222,6 +222,8 @@ class Platform:
 		self.fade_duration = (
 			get_fragile_fade_duration() if kind == "fragile" else get_platform_fade_duration()
 		)
+		self.hitbox_h = max(1, height // 2) if kind == "fragile" else height
+		self.hitbox_offset_y = self.h - self.hitbox_h
 
 		# Lifetime tracking
 		self.landed_time = None  # When player landed on this platform
@@ -234,7 +236,7 @@ class Platform:
 	@property
 	def rect(self):
 		"""Bounding rectangle for collision detection."""
-		return pygame.Rect(self.x, self.y, self.w, self.h)
+		return pygame.Rect(self.x, self.y + self.hitbox_offset_y, self.w, self.hitbox_h)
 
 	def land(self):
 		"""Called when player lands on this platform. Only starts fading once."""

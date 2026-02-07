@@ -29,8 +29,8 @@ def check_if_on_platform(player, platforms, prev_y):
 		if player_right > platform_left and player_left < platform_right:
 			# Check if player is above or on the platform (player's bottom near platform's top)
 			player_bottom = player.y + player.radius
-			platform_top = platform.y
-			platform_bottom = platform.y + platform.h
+			platform_top = platform.rect.y
+			platform_bottom = platform.rect.y + platform.rect.h
 
 			# Normal case: player crosses the platform top while falling
 			if (
