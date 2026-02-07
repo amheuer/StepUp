@@ -35,6 +35,7 @@ from config import (
 	PLAYER_MAX_SPEED,
 	PLAYER_HEIGHT_METERS,
 	PLATFORM_IGNORE_TIME,
+	PLATFORM_HEIGHT,
 	JUMP_REARM_TIME,
 )
 from entities import Player, Platform
@@ -133,6 +134,9 @@ class Game:
 		self.pause_options = ["RESUME", "MUSIC", "SFX", "INTENSITY", "RESTART", "MAIN MENU", "QUIT"]
 		self.in_menu = True
 		self.in_health = False
+		self.in_tutorial = False
+		self.portal_rect = None
+		self.portal_timer = 0.0
 		self.menu_index = 0
 		self.menu_options = ["PLAY", "HEALTH  INFO", "SIGN IN"]
 		self.menu_option_rects = {}
@@ -406,20 +410,102 @@ class Game:
 					pygame.draw.rect(surf, COLOR_BARS_PATTERN, (x, y, tile, tile))
 		return surf
 
-	def _cycle_intensity(self, step):
-		levels = [cfg.Intensity.LOW, cfg.Intensity.MEDIUM, cfg.Intensity.HIGH]
-		idx = levels.index(cfg.INTENSITY)
-		cfg.INTENSITY = levels[(idx + step) % len(levels)]
-		for platform in self.platforms:
-			if platform.kind == "fragile":
-				platform.fade_duration = cfg.get_fragile_fade_duration()
-			else:
-				platform.fade_duration = cfg.get_platform_fade_duration()
+	# ── Tutorial level ──────────────────────────────────────────────
+	def _setup_tutorial(self):
+		"""Set up the tutorial level layout.
+
+		Layout (all coordinates in the 400×600 game surface):
+		  - Solid ground spanning the full width at the bottom.
+		  - A platform on the right side, a bit above the ground.
+		  - A platform on the left side, higher up.
+		  - A portal centred at the top of the screen.
+		"""
+		self.in_tutorial = True
+		self.portal_timer = 0.0
+
+		# Start with an empty platform list
+		self.platforms = []
+
+		# 1.  Solid ground — a wide platform that never fades
+		ground = Platform(0, WINDOW_HEIGHT - 30,
+						  width=WINDOW_WIDTH, height=30, kind="normal")
+		ground.fade_duration = 1e9          # effectively never fades
+		self.platforms.append(ground)
+
+		# 2.  Right-side step
+		step_w = 90
+		right_plat = Platform(
+			WINDOW_WIDTH - step_w - 30, WINDOW_HEIGHT - 160,
+			width=step_w, height=PLATFORM_HEIGHT, kind="normal",
+		)
+		right_plat.fade_duration = 1e9
+		self.platforms.append(right_plat)
+
+		# 3.  Left-side step (higher)
+		left_plat = Platform(
+			30, WINDOW_HEIGHT - 300,
+			width=step_w, height=PLATFORM_HEIGHT, kind="normal",
+		)
+		left_plat.fade_duration = 1e9
+		self.platforms.append(left_plat)
+
+		# 4.  Portal at the top centre
+		portal_w, portal_h = 50, 60
+		self.portal_rect = pygame.Rect(
+			(WINDOW_WIDTH - portal_w) // 2,
+			30,
+			portal_w,
+			portal_h,
+		)
+
+		# Place the player on the ground
+		self.player = Player(WINDOW_WIDTH // 2, WINDOW_HEIGHT - 30 - PLAYER_RADIUS)
+		self.coins = []
+		self.countdown_active = False  # No countdown in tutorial
+
+	def _exit_tutorial(self):
+		"""Leave the tutorial and start the real game."""
+		self.in_tutorial = False
+		self.portal_rect = None
+		self.reset()
+
+	def _draw_portal(self):
+		"""Draw a swirling portal effect at self.portal_rect."""
+		if self.portal_rect is None:
+			return
+		cx = self.portal_rect.centerx
+		cy = self.portal_rect.centery
+		t = self.portal_timer
+		# Concentric pulsing ellipses
+		for i in range(4, 0, -1):
+			pulse = 1.0 + 0.15 * math.sin(t * 3 + i)
+			rw = int(self.portal_rect.w // 2 * (i / 4) * pulse)
+			rh = int(self.portal_rect.h // 2 * (i / 4) * pulse)
+			alpha = 120 + 30 * i
+			hue_shift = int((t * 80 + i * 40) % 256)
+			color = pygame.Color(0)
+			color.hsva = (hue_shift % 360, 80, 100, 0)
+			r, g, b = color.r, color.g, color.b
+			surf = pygame.Surface((rw * 2, rh * 2), pygame.SRCALPHA)
+			pygame.draw.ellipse(surf, (r, g, b, alpha), (0, 0, rw * 2, rh * 2))
+			self.game_surface.blit(surf, (cx - rw, cy - rh))
 
 	def _start_game(self):
 		"""Handle the PLAY action: capture photos if needed, then start."""
+		# Check whether character creation is about to happen
+		needs_creation = False
+		if self.current_user:
+			sprite_dir = self._user_sprite_dir()
+			if not user_has_photos(str(sprite_dir)):
+				needs_creation = True
+
 		self._ensure_user_photos()
 		self.reset()
+
+		# Only show the tutorial right after character creation
+		if needs_creation:
+			self._setup_tutorial()
+
 		self.in_menu = False
 		self.in_health = False
 
@@ -678,51 +764,72 @@ class Game:
 				max_x = min_x
 			self.player.x = max(min_x, min(max_x, self.player.x))
 
-		# Handle scrolling
-		if self.player.y < SCROLL_THRESHOLD:
-			dy = SCROLL_THRESHOLD - self.player.y
-			self.player.y = SCROLL_THRESHOLD
-			for platform in self.platforms:
-				platform.y += dy
-			for coin in self.coins:
-				coin.y += dy
+		# ── Tutorial-specific vs normal game logic ──────────────────
+		if self.in_tutorial:
+			# No scrolling in the tutorial
+			# Keep player within the screen bounds
+			if self.player.y - self.player.radius > WINDOW_HEIGHT:
+				# Respawn on the ground instead of game-over
+				self.player.x = WINDOW_WIDTH // 2
+				self.player.y = WINDOW_HEIGHT - 30 - PLAYER_RADIUS
+				self.player.vx = 0
+				self.player.vy = 0
 
-		# Remove off-screen or faded platforms
-		self.platforms = [
-			p for p in self.platforms if p.y < WINDOW_HEIGHT + 50 and p.is_active
-		]
+			# Animate portal
+			self.portal_timer += dt
 
-		# Generate new platforms
-		new_platforms = generate_new_platforms(self.platforms)
+			# Check portal collision
+			if self.portal_rect and self.player.rect.colliderect(self.portal_rect):
+				if play_sfx:
+					self.sfx["power_up.wav"].play()
+				self._exit_tutorial()
+				return
+		else:
+			# Handle scrolling
+			if self.player.y < SCROLL_THRESHOLD:
+				dy = SCROLL_THRESHOLD - self.player.y
+				self.player.y = SCROLL_THRESHOLD
+				for platform in self.platforms:
+					platform.y += dy
+				for coin in self.coins:
+					coin.y += dy
 
-		# Add coins near platforms
-		self.coins.extend(spawn_coins_near_platforms(new_platforms))
+			# Remove off-screen or faded platforms
+			self.platforms = [
+				p for p in self.platforms if p.y < WINDOW_HEIGHT + 50 and p.is_active
+			]
 
-		# Collect coins
-		coin_score, coin_count = collect_coins(self.player, self.coins)
-		self.coins_collected += coin_count
-		if play_sfx and coin_count > 0:
-			self.sfx["coin.wav"].play()
-		self.score = int(self.height_jumped * 2) + self.coins_collected * COIN_VALUE
-		if self.score > self.high_score:
-			self.high_score = self.score
-		if self.current_user:
-			user = self.users[self.current_user]
-			if self.high_score > user["highscore"]:
-				user["highscore"] = self.high_score
-		if play_sfx and self.high_score >= self.next_high_score_sfx:
-			self.sfx["power_up.wav"].play()
-			self.next_high_score_sfx += 1000
+			# Generate new platforms
+			new_platforms = generate_new_platforms(self.platforms)
 
-		# Cull coins
-		self.coins = cull_coins(self.coins)
+			# Add coins near platforms
+			self.coins.extend(spawn_coins_near_platforms(new_platforms))
 
-		# Check game over condition
-		if self.player.y - self.player.radius > WINDOW_HEIGHT:
-			if play_sfx:
-				self.sfx["explosion.wav"].play()
-			pygame.mixer.music.stop()
-			self.game_over = True
+			# Collect coins
+			coin_score, coin_count = collect_coins(self.player, self.coins)
+			self.coins_collected += coin_count
+			if play_sfx and coin_count > 0:
+				self.sfx["coin.wav"].play()
+			self.score = int(self.height_jumped * 2) + self.coins_collected * COIN_VALUE
+			if self.score > self.high_score:
+				self.high_score = self.score
+			if self.current_user:
+				user = self.users[self.current_user]
+				if self.high_score > user["highscore"]:
+					user["highscore"] = self.high_score
+			if play_sfx and self.high_score >= self.next_high_score_sfx:
+				self.sfx["power_up.wav"].play()
+				self.next_high_score_sfx += 1000
+
+			# Cull coins
+			self.coins = cull_coins(self.coins)
+
+			# Check game over condition
+			if self.player.y - self.player.radius > WINDOW_HEIGHT:
+				if play_sfx:
+					self.sfx["explosion.wav"].play()
+				pygame.mixer.music.stop()
+				self.game_over = True
 
 		per_min = self._update_calories()
 		self.calories += per_min * (dt / 60.0)
@@ -866,6 +973,16 @@ class Game:
 				platform.draw(self.game_surface)
 			for coin in self.coins:
 				coin.draw(self.game_surface)
+
+			# Draw tutorial elements (portal + hint text)
+			if self.in_tutorial:
+				self._draw_portal()
+				hint = self.subtitle_font.render(
+					"JUMP TO THE PORTAL!", True, COLOR_TEXT
+				)
+				hint_x = (WINDOW_WIDTH - hint.get_width()) // 2
+				self.game_surface.blit(hint, (hint_x, WINDOW_HEIGHT - 60))
+
 			self.player.draw(self.game_surface)
 
 			# Draw UI
@@ -895,7 +1012,7 @@ class Game:
 				pygame.draw.rect(self.screen, (0, 0, 0), left_border)
 				pygame.draw.rect(self.screen, (0, 0, 0), right_border)
 
-			if offset_x > 0:
+			if offset_x > 0 and not self.in_tutorial:
 				text_lines = [
 					f"HIGHSCORE: {self.high_score}",
 					f"SCORE: {self.score}",

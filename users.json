@@ -168,5 +168,10 @@
     "highscore": 0,
     "lifetime_calories": 0.0,
     "minutes_played": 0.0
+  },
+  "SSS": {
+    "highscore": 0,
+    "lifetime_calories": 6.841199999999852,
+    "minutes_played": 0.8551499999999815
   }
 }
