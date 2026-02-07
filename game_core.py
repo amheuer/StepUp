@@ -110,6 +110,8 @@ class Game:
 		self.pause_option_rects = {}
 		self.render_scale = 1.0
 		self.render_offset = (0, 0)
+		self.hover_menu_index = None
+		self.hover_pause_index = None
 		self.signin_mode = False
 		self.username_input = ""
 		self.current_user = None
@@ -587,7 +589,8 @@ class Game:
 			self.pause_option_rects = {}
 			max_w = title.get_width()
 			for i, line in enumerate(lines):
-				prefix = "> " if i == self.pause_index else "  "
+				selected = i == self.pause_index or i == self.hover_pause_index
+				prefix = "> " if selected else "  "
 				text = self.font.render(prefix + line, True, COLOR_GAME_OVER)
 				text = pygame.transform.smoothscale(
 					text,
@@ -698,20 +701,30 @@ class Game:
 	def _update_cursor(self):
 		"""Update mouse cursor based on hover state."""
 		hover = False
+		self.hover_menu_index = None
+		self.hover_pause_index = None
 		mx, my = pygame.mouse.get_pos()
 		if self.in_menu:
-			for rect in self.menu_option_rects.values():
-				if rect.collidepoint(mx, my):
+			for i, key in enumerate(self.menu_options):
+				rect = self.menu_option_rects.get(key)
+				if rect and rect.collidepoint(mx, my):
 					hover = True
+					self.hover_menu_index = i
 					break
 		elif self.paused:
 			game_pos = self._screen_to_game((mx, my))
 			if game_pos:
 				gx, gy = game_pos
-				for rect in self.pause_option_rects.values():
-					if rect.collidepoint(gx, gy):
+				for i, key in enumerate(self.pause_options):
+					rect = self.pause_option_rects.get(key)
+					if rect and rect.collidepoint(gx, gy):
 						hover = True
+						self.hover_pause_index = i
 						break
+		if self.hover_menu_index is not None:
+			self.menu_index = self.hover_menu_index
+		if self.hover_pause_index is not None:
+			self.pause_index = self.hover_pause_index
 		cursor = pygame.SYSTEM_CURSOR_HAND if hover else pygame.SYSTEM_CURSOR_ARROW
 		pygame.mouse.set_cursor(cursor)
 
@@ -752,7 +765,8 @@ class Game:
 		self.menu_option_rects = {}
 		options = []
 		for i, opt in enumerate(self.menu_options):
-			prefix = "> " if i == self.menu_index else "  "
+			selected = i == self.menu_index or i == self.hover_menu_index
+			prefix = "> " if selected else "  "
 			options.append(self.menu_font.render(prefix + opt, True, COLOR_BARS_TEXT))
 		spacing = 30
 		total_w = sum(o.get_width() for o in options) + spacing * (len(options) - 1)
