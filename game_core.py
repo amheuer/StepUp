@@ -58,6 +58,7 @@ FONT_PATH = (
 	/ "Extraordinary Font.ttf"
 )
 SOUNDTRACK_PATH = Path(__file__).resolve().parent / "assets" / "Sounds" / "Jeremy Blake - Powerup!.mp3"
+MENU_MUSIC_PATH = Path(__file__).resolve().parent / "assets" / "Sounds" / "Vibe Mountain - Operatic 3.mp3"
 SFX_DIR = Path(__file__).resolve().parent / "assets" / "brackeys_platformer_assets" / "sounds"
 COIN_DIR = Path(__file__).resolve().parent / "assets" / "Coin" / "spinning_coin"
 TILESET_PATH = (
@@ -97,14 +98,15 @@ class Game:
 		self.next_high_score_sfx = 1000
 		self.music_volume = 0.7
 		self.sfx_volume = 0.7
+		self.game_music_path = SOUNDTRACK_PATH
+		self.menu_music_path = MENU_MUSIC_PATH
+		self.current_music_path = None
 		tileset = pygame.image.load(TILESET_PATH).convert_alpha()
 		Platform.load_tileset(tileset)
 		self._load_player_sprites()
 		self._load_coin_frames()
 		self.sfx = self._load_sfx()
-		pygame.mixer.music.load(SOUNDTRACK_PATH)
-		pygame.mixer.music.set_volume(self.music_volume)
-		pygame.mixer.music.play(-1)
+		self._play_music(self.menu_music_path, restart=True)
 		self.skip_sfx_frames = 0
 		self._load_backgrounds()
 		self.particle_surface_far = self._build_particle_layer(50)
@@ -165,6 +167,8 @@ class Game:
 		self.user_save_timer = 0.0
 		self.game_over_rect = None
 		self._init_cv()
+		if self.in_menu:
+			self._play_music(self.menu_music_path, restart=True)
 
 	def _init_cv(self):
 		try:
@@ -173,6 +177,19 @@ class Game:
 		except Exception as exc:
 			self.cv = None
 			print(f"[CV] Failed to initialize CV controller: {exc}")
+
+	def _play_music(self, path, restart=False):
+		if not path:
+			return
+		if self.current_music_path == path and not restart:
+			return
+		try:
+			pygame.mixer.music.load(path)
+			pygame.mixer.music.set_volume(self.music_volume)
+			pygame.mixer.music.play(-1)
+			self.current_music_path = path
+		except Exception as exc:
+			print(f"[Audio] Failed to play music {path}: {exc}")
 
 	def _load_menu_background(self):
 		if not MENU_BG_PATH.exists():
@@ -193,7 +210,7 @@ class Game:
 		self.next_high_score_sfx = 1000
 		self.game_over = False
 		self.paused = False
-		pygame.mixer.music.play(-1)
+		self._play_music(self.game_music_path, restart=True)
 		self.skip_sfx_frames = 2
 		self.countdown_active = True
 		self.countdown_remaining = 3.0
@@ -326,6 +343,7 @@ class Game:
 		pygame.display.iconify()
 
 		try:
+			self._play_music(self.menu_music_path)
 			success = capture_and_process_for_user(
 				player_dir=str(sprite_dir),
 				countdown=10,
@@ -584,6 +602,7 @@ class Game:
 				needs_creation = True
 
 		self._ensure_user_photos()
+		self._play_music(self.game_music_path, restart=True)
 		self.reset()
 
 		# Only show the tutorial right after character creation
@@ -688,12 +707,10 @@ class Game:
 					if event.key in (pygame.K_ESCAPE, pygame.K_BACKSPACE, pygame.K_RETURN, pygame.K_SPACE):
 						self.in_health = False
 						self.in_menu = True
+						self._play_music(self.menu_music_path)
 					continue
 				if event.key == pygame.K_ESCAPE:
 					self.paused = not self.paused
-				elif self.game_over and event.key in (pygame.K_r, pygame.K_RETURN, pygame.K_SPACE):
-					self.reset()
-					self.game_over = False
 				elif self.paused:
 					if event.key in (pygame.K_UP, pygame.K_w):
 						self.pause_index = (self.pause_index - 1) % len(self.pause_options)
@@ -735,8 +752,12 @@ class Game:
 							self.paused = False
 							self.in_health = False
 							self.in_menu = True
+							self._play_music(self.menu_music_path)
 						elif choice == "QUIT":
 							self.running = False
+				elif self.game_over and event.key in (pygame.K_r, pygame.K_RETURN, pygame.K_SPACE):
+					self.reset()
+					self.game_over = False
 
 	def update(self, dt):
 		"""Update game state."""
