@@ -22,6 +22,19 @@ from config import (
 class Player:
 	"""Represents the jumping player character."""
 
+	sprites_loaded = False
+	sprite_stand = None
+	sprite_left = None
+	sprite_jump = None
+
+	@classmethod
+	def load_sprites(cls, stand, left, right, jump):
+		cls.sprite_stand = stand
+		cls.sprite_left = left
+		cls.sprite_right = right
+		cls.sprite_jump = jump
+		cls.sprites_loaded = True
+
 	def __init__(self, x, y, radius=PLAYER_RADIUS):
 		self.x = x
 		self.y = y
@@ -83,7 +96,19 @@ class Player:
 		self.vy = -strength
 
 	def draw(self, surface):
-		"""Draw the player as a circle."""
+		"""Draw the player as a circle or sprite."""
+		if Player.sprites_loaded:
+			if self.vy < -1:
+				sprite = Player.sprite_jump
+			elif self.vx < -1:
+				sprite = Player.sprite_left
+			elif self.vx > 1:
+				sprite = Player.sprite_right
+			else:
+				sprite = Player.sprite_stand
+			rect = sprite.get_rect(center=(int(self.x), int(self.y)))
+			surface.blit(sprite, rect)
+			return
 		pygame.draw.circle(surface, self.color, (int(self.x), int(self.y)), self.radius)
 
 

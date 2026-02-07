@@ -54,6 +54,7 @@ TILESET_PATH = (
 	/ "Tileset"
 	/ "Tileset.png"
 )
+PLAYER_DIR = Path(__file__).resolve().parent / "assets" / "player_images"
 
 
 class Game:
@@ -67,6 +68,9 @@ class Game:
 		self.clock = pygame.time.Clock()
 		self.ui_font = pygame.font.Font(FONT_PATH, UI_FONT_SIZE)
 		self.font = self.ui_font
+		self.title_font = pygame.font.Font(FONT_PATH, 14)
+		self.subtitle_font = pygame.font.Font(FONT_PATH, 6)
+		self.menu_font = pygame.font.Font(FONT_PATH, 8)
 		self.game_surface = pygame.Surface((WINDOW_WIDTH, WINDOW_HEIGHT))
 		self.high_score = 0
 		self.next_high_score_sfx = 1000
@@ -74,6 +78,7 @@ class Game:
 		self.sfx_volume = 0.7
 		tileset = pygame.image.load(TILESET_PATH).convert_alpha()
 		Platform.load_tileset(tileset)
+		self._load_player_sprites()
 		self._load_coin_frames()
 		self.sfx = self._load_sfx()
 		pygame.mixer.music.load(SOUNDTRACK_PATH)
@@ -85,13 +90,19 @@ class Game:
 		self.particle_surface_near = self._build_particle_layer(90)
 		self.bar_pattern_surface = None
 		self.bar_pattern_size = (0, 0)
+		self.menu_pattern_surface = None
+		self.menu_pattern_size = (0, 0)
 
 		self.reset()
 		self.running = True
 		self.game_over = False
 		self.paused = False
 		self.pause_index = 0
-		self.pause_options = ["RESUME", "MUSIC", "SFX", "RESTART", "QUIT"]
+		self.pause_options = ["RESUME", "MUSIC", "SFX", "RESTART", "MAIN MENU", "QUIT"]
+		self.in_menu = True
+		self.in_health = False
+		self.menu_index = 0
+		self.menu_options = ["PLAY", "HEALTH  INFO"]
 
 	def reset(self):
 		"""Reset game state for a new game."""
@@ -104,6 +115,8 @@ class Game:
 		self.calories = 0.0
 		self.display_calories = 0.0
 		self.next_high_score_sfx = 1000
+		self.game_over = False
+		self.paused = False
 		pygame.mixer.music.play(-1)
 		self.skip_sfx_frames = 2
 
@@ -142,6 +155,19 @@ class Game:
 			frame = pygame.transform.smoothscale(frame, (size, size))
 			frames.append(frame)
 		Coin.load_frames(frames, frame_time_ms=80)
+
+	def _load_player_sprites(self):
+		"""Load player sprites."""
+		stand = pygame.image.load(PLAYER_DIR / "stand_still.png").convert_alpha()
+		left = pygame.image.load(PLAYER_DIR / "move_left.png").convert_alpha()
+		right = pygame.transform.flip(left, True, False)
+		jump = pygame.image.load(PLAYER_DIR / "jump.png").convert_alpha()
+		size = PLAYER_RADIUS * 2
+		stand = pygame.transform.smoothscale(stand, (size, size))
+		left = pygame.transform.smoothscale(left, (size, size))
+		right = pygame.transform.smoothscale(right, (size, size))
+		jump = pygame.transform.smoothscale(jump, (size, size))
+		Player.load_sprites(stand, left, right, jump)
 
 	def _load_backgrounds(self):
 		"""Load background layers from the asset pack."""
@@ -187,17 +213,48 @@ class Game:
 					pygame.draw.rect(surf, COLOR_BARS_PATTERN, (x, y, tile, tile))
 		return surf
 
+	def _build_menu_pattern(self, width, height):
+		"""Create a random pixel pattern for the menu background."""
+		surf = pygame.Surface((width, height))
+		surf.fill(COLOR_BARS)
+		rng = random.Random(2024)
+		tile = 8
+		for y in range(0, height, tile):
+			for x in range(0, width, tile):
+				if rng.random() < 0.55:
+					pygame.draw.rect(surf, COLOR_BARS_PATTERN, (x, y, tile, tile))
+		return surf
+
 	def handle_events(self):
 		"""Process input events."""
 		for event in pygame.event.get():
 			if event.type == pygame.QUIT:
 				self.running = False
 			elif event.type == pygame.KEYDOWN:
-				if event.key == pygame.K_ESCAPE:
-					if self.game_over:
+				if self.in_menu:
+					if event.key in (pygame.K_LEFT, pygame.K_a):
+						self.menu_index = (self.menu_index - 1) % len(self.menu_options)
+					elif event.key in (pygame.K_RIGHT, pygame.K_d):
+						self.menu_index = (self.menu_index + 1) % len(self.menu_options)
+					elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
+						choice = self.menu_options[self.menu_index]
+						if choice == "PLAY":
+							self.reset()
+							self.in_menu = False
+							self.in_health = False
+						elif choice == "HEALTH":
+							self.in_menu = False
+							self.in_health = True
+					elif event.key == pygame.K_ESCAPE:
 						self.running = False
-					else:
-						self.paused = not self.paused
+					continue
+				if self.in_health:
+					if event.key in (pygame.K_ESCAPE, pygame.K_BACKSPACE, pygame.K_RETURN, pygame.K_SPACE):
+						self.in_health = False
+						self.in_menu = True
+					continue
+				if event.key == pygame.K_ESCAPE:
+					self.paused = not self.paused
 				elif self.game_over and event.key == pygame.K_r:
 					self.reset()
 					self.game_over = False
@@ -234,12 +291,16 @@ class Game:
 							self.reset()
 							self.game_over = False
 							self.paused = False
+						elif choice == "MAIN MENU":
+							self.paused = False
+							self.in_health = False
+							self.in_menu = True
 						elif choice == "QUIT":
 							self.running = False
 
 	def update(self, dt):
 		"""Update game state."""
-		if self.game_over or self.paused:
+		if self.game_over or self.paused or self.in_menu or self.in_health:
 			return
 
 		keys = pygame.key.get_pressed()
@@ -372,7 +433,7 @@ class Game:
 			x = box_x + box_padding
 			y = box_y + box_padding
 			self.game_surface.blit(game_over_text, (x, y))
-		elif self.paused:
+		if self.paused:
 			title = self.font.render("SETTINGS", True, COLOR_GAME_OVER)
 			title = pygame.transform.smoothscale(
 				title,
@@ -433,62 +494,125 @@ class Game:
 
 	def draw(self):
 		"""Render the game state."""
-		self.draw_background()
-
-		# Draw platforms and player
-		for platform in self.platforms:
-			platform.draw(self.game_surface)
-		for coin in self.coins:
-			coin.draw(self.game_surface)
-		self.player.draw(self.game_surface)
-
-		# Draw UI
-		self.draw_ui()
-
 		screen_w, screen_h = self.screen.get_size()
-		scale = min(screen_w / WINDOW_WIDTH, screen_h / WINDOW_HEIGHT)
-		scaled_w = int(WINDOW_WIDTH * scale)
-		scaled_h = int(WINDOW_HEIGHT * scale)
-		offset_x = (screen_w - scaled_w) // 2
-		offset_y = (screen_h - scaled_h) // 2
+		if self.in_menu:
+			self._draw_menu_screen(screen_w, screen_h)
+		elif self.in_health:
+			self._draw_health_screen(screen_w, screen_h)
+		else:
+			self.draw_background()
 
-		self.screen.fill(COLOR_BARS)
-		scaled_surface = pygame.transform.smoothscale(self.game_surface, (scaled_w, scaled_h))
-		self.screen.blit(scaled_surface, (offset_x, offset_y))
-		if offset_x > 0:
-			bar_w = offset_x
-			if self.bar_pattern_size != (bar_w, screen_h):
-				self.bar_pattern_surface = self._build_bar_pattern(bar_w, screen_h)
-				self.bar_pattern_size = (bar_w, screen_h)
-			self.screen.blit(self.bar_pattern_surface, (0, 0))
-			self.screen.blit(self.bar_pattern_surface, (offset_x + scaled_w, 0))
-			left_border = pygame.Rect(offset_x - 2, 0, 2, screen_h)
-			right_border = pygame.Rect(offset_x + scaled_w, 0, 2, screen_h)
-			pygame.draw.rect(self.screen, (0, 0, 0), left_border)
-			pygame.draw.rect(self.screen, (0, 0, 0), right_border)
+			# Draw platforms and player
+			for platform in self.platforms:
+				platform.draw(self.game_surface)
+			for coin in self.coins:
+				coin.draw(self.game_surface)
+			self.player.draw(self.game_surface)
 
-		if offset_x > 0:
-			text_lines = [
-				f"HIGHSCORE: {self.high_score}",
-				f"SCORE: {self.score}",
-				f"HEIGHT: {self.height_jumped:.1f}M",
-				f"COINS: {self.coins_collected}",
-			]
-			tx = 16
-			ty = 20
-			for line in text_lines:
-				text_surf = self.ui_font.render(line, True, COLOR_BARS_TEXT)
-				self.screen.blit(text_surf, (tx, ty))
-				ty += text_surf.get_height() + 10
+			# Draw UI
+			self.draw_ui()
 
-			cal_text = self.ui_font.render(
-				f"CALORIES: {self.display_calories:.2f}", True, COLOR_BARS_TEXT
-			)
-			right_bar_left = offset_x + scaled_w
-			cal_x = right_bar_left + 16
-			self.screen.blit(cal_text, (cal_x, 20))
+			scale = min(screen_w / WINDOW_WIDTH, screen_h / WINDOW_HEIGHT)
+			scaled_w = int(WINDOW_WIDTH * scale)
+			scaled_h = int(WINDOW_HEIGHT * scale)
+			offset_x = (screen_w - scaled_w) // 2
+			offset_y = (screen_h - scaled_h) // 2
+
+			self.screen.fill(COLOR_BARS)
+			scaled_surface = pygame.transform.smoothscale(self.game_surface, (scaled_w, scaled_h))
+			self.screen.blit(scaled_surface, (offset_x, offset_y))
+			if offset_x > 0:
+				bar_w = offset_x
+				if self.bar_pattern_size != (bar_w, screen_h):
+					self.bar_pattern_surface = self._build_bar_pattern(bar_w, screen_h)
+					self.bar_pattern_size = (bar_w, screen_h)
+				self.screen.blit(self.bar_pattern_surface, (0, 0))
+				self.screen.blit(self.bar_pattern_surface, (offset_x + scaled_w, 0))
+				left_border = pygame.Rect(offset_x - 2, 0, 2, screen_h)
+				right_border = pygame.Rect(offset_x + scaled_w, 0, 2, screen_h)
+				pygame.draw.rect(self.screen, (0, 0, 0), left_border)
+				pygame.draw.rect(self.screen, (0, 0, 0), right_border)
+
+			if offset_x > 0:
+				text_lines = [
+					f"HIGHSCORE: {self.high_score}",
+					f"SCORE: {self.score}",
+					f"HEIGHT: {self.height_jumped:.1f}M",
+					f"COINS: {self.coins_collected}",
+				]
+				tx = 16
+				ty = 20
+				for line in text_lines:
+					text_surf = self.ui_font.render(line, True, COLOR_BARS_TEXT)
+					self.screen.blit(text_surf, (tx, ty))
+					ty += text_surf.get_height() + 10
+
+				cal_text = self.ui_font.render(
+					f"CALORIES: {self.display_calories:.2f}", True, COLOR_BARS_TEXT
+				)
+				right_bar_left = offset_x + scaled_w
+				cal_x = right_bar_left + 16
+				self.screen.blit(cal_text, (cal_x, 20))
 
 		pygame.display.flip()
+
+	def _draw_menu_screen(self, screen_w, screen_h):
+		if self.menu_pattern_size != (screen_w, screen_h):
+			self.menu_pattern_surface = self._build_menu_pattern(screen_w, screen_h)
+			self.menu_pattern_size = (screen_w, screen_h)
+		self.screen.blit(self.menu_pattern_surface, (0, 0))
+
+		step = self.title_font.render("STEP", True, COLOR_BARS_TEXT)
+		up = self.title_font.render("UP!", True, COLOR_BARS_TEXT)
+		subtitle = self.subtitle_font.render("THE HEALTH  PLATFORMER", True, COLOR_BARS_TEXT)
+
+		title_w = step.get_width() + up.get_width()
+		title_x = (screen_w - title_w) // 2
+		block_h = step.get_height() + 10 + subtitle.get_height() + 40 + self.menu_font.get_height() + 8
+		title_y = (screen_h - block_h) // 2
+		self.screen.blit(step, (title_x, title_y))
+		up_offset = max(1, int(step.get_height() * 0.25))
+		self.screen.blit(up, (title_x + step.get_width(), title_y - up_offset))
+
+		sub_x = (screen_w - subtitle.get_width()) // 2
+		sub_y = title_y + step.get_height() + 10
+		self.screen.blit(subtitle, (sub_x, sub_y))
+
+		prefix_w = self.subtitle_font.size("THE HEALTH ")[0]
+		platform_w = self.subtitle_font.size("PLATFORM")[0]
+		underline_y = sub_y + subtitle.get_height() - 2
+		underline_x = sub_x + prefix_w
+		pygame.draw.line(
+			self.screen,
+			COLOR_BARS_TEXT,
+			(underline_x, underline_y),
+			(underline_x + platform_w, underline_y),
+			6,
+		)
+
+		options = []
+		for i, opt in enumerate(self.menu_options):
+			prefix = "> " if i == self.menu_index else "  "
+			options.append(self.menu_font.render(prefix + opt, True, COLOR_BARS_TEXT))
+		spacing = 30
+		total_w = options[0].get_width() + options[1].get_width() + spacing
+		start_x = (screen_w - total_w) // 2
+		ty = sub_y + subtitle.get_height() + 40
+		for i, text in enumerate(options):
+			tx = start_x
+			if i == 1:
+				tx += options[0].get_width() + spacing
+			self.screen.blit(text, (tx, ty))
+
+	def _draw_health_screen(self, screen_w, screen_h):
+		if self.menu_pattern_size != (screen_w, screen_h):
+			self.menu_pattern_surface = self._build_menu_pattern(screen_w, screen_h)
+			self.menu_pattern_size = (screen_w, screen_h)
+		self.screen.blit(self.menu_pattern_surface, (0, 0))
+		title = self.title_font.render("HEALTH INFO", True, COLOR_BARS_TEXT)
+		sub = self.subtitle_font.render("COMING SOON", True, COLOR_BARS_TEXT)
+		self.screen.blit(title, ((screen_w - title.get_width()) // 2, screen_h // 2 - 40))
+		self.screen.blit(sub, ((screen_w - sub.get_width()) // 2, screen_h // 2 + 10))
 
 	def run(self):
 		"""Main game loop."""
