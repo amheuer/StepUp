@@ -1,0 +1,13 @@
+name: yolo-sam
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.11
+  - numpy
+  - pip
+  - pip:
+      - torch>=2.10 --index-url https://download.pytorch.org/whl/cu128
+      - torchvision>=0.25 --index-url https://download.pytorch.org/whl/cu128
+      - ultralytics>=8.4
+      - opencv-python
