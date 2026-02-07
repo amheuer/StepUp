@@ -47,8 +47,9 @@ def spawn_coins_near_platforms(platforms):
 
 
 def collect_coins(player, coins):
-	"""Collect coins that overlap the player. Returns the score gained."""
+	"""Collect coins that overlap the player. Returns (score_gained, count_gained)."""
 	score_gained = 0
+	count_gained = 0
 	for coin in coins:
 		if coin.collected:
 			continue
@@ -58,8 +59,9 @@ def collect_coins(player, coins):
 		if distance_sq <= (player.radius + coin.radius) ** 2:
 			coin.collected = True
 			score_gained += COIN_VALUE
+			count_gained += 1
 
-	return score_gained
+	return score_gained, count_gained
 
 
 def cull_coins(coins):

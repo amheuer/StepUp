@@ -87,6 +87,51 @@ class Player:
 class Platform:
 	"""Represents a platform the player can jump on."""
 
+	tileset_loaded = False
+	tiles_normal = None
+	tiles_fragile = None
+	tiles_scaled_cache = {}
+
+	@classmethod
+	def load_tileset(cls, tileset_surface):
+		"""Load platform tiles from the tileset surface."""
+		tileset_w = tileset_surface.get_width()
+		tile_w = tileset_w // 8
+		tile_h = tile_w
+
+		def tile_at(row, col):
+			rect = pygame.Rect(col * tile_w, row * tile_h, tile_w, tile_h)
+			return tileset_surface.subsurface(rect).copy()
+
+		cls.tiles_normal = (
+			tile_at(3, 0),
+			tile_at(3, 1),
+			tile_at(3, 2),
+		)
+		cls.tiles_fragile = (
+			tile_at(4, 0),
+			tile_at(4, 1),
+			tile_at(4, 2),
+		)
+		cls.tileset_loaded = True
+		cls.tiles_scaled_cache.clear()
+
+	@classmethod
+	def _get_scaled_tiles(cls, kind, height):
+		key = (kind, height)
+		if key in cls.tiles_scaled_cache:
+			return cls.tiles_scaled_cache[key]
+		if kind == "fragile":
+			left, mid, right = cls.tiles_fragile
+		else:
+			left, mid, right = cls.tiles_normal
+		tile_w = height
+		left_s = pygame.transform.scale(left, (tile_w, height))
+		mid_s = pygame.transform.scale(mid, (tile_w, height))
+		right_s = pygame.transform.scale(right, (tile_w, height))
+		cls.tiles_scaled_cache[key] = (left_s, mid_s, right_s)
+		return left_s, mid_s, right_s
+
 	def __init__(self, x, y, width, height, kind="normal"):
 		self.x = x
 		self.y = y
@@ -158,7 +203,34 @@ class Platform:
 		if alpha <= 0:
 			return
 
-		# Create a surface with per-pixel alpha for fading
+		if Platform.tileset_loaded:
+			left, mid, right = Platform._get_scaled_tiles(self.kind, self.h)
+			left = left.copy()
+			mid = mid.copy()
+			right = right.copy()
+			left.set_alpha(alpha)
+			mid.set_alpha(alpha)
+			right.set_alpha(alpha)
+
+			tile_w = left.get_width()
+			draw_x = int(self.x)
+			draw_y = int(self.y)
+			x = draw_x
+			right_x = draw_x + self.w - tile_w
+			if self.w <= tile_w * 2:
+				surface.blit(left, (x, draw_y))
+				surface.blit(right, (right_x, draw_y))
+				return
+
+			surface.blit(left, (x, draw_y))
+			x += tile_w
+			while x <= right_x - tile_w:
+				surface.blit(mid, (x, draw_y))
+				x += tile_w
+			surface.blit(right, (right_x, draw_y))
+			return
+
+		# Fallback to solid rects if tiles aren't loaded.
 		platform_surf = pygame.Surface((self.w, self.h), pygame.SRCALPHA)
 		color_with_alpha = (*self.color, alpha)
 		pygame.draw.rect(
@@ -167,4 +239,4 @@ class Platform:
 			(0, 0, self.w, self.h),
 			border_radius=4,
 		)
-		surface.blit(platform_surf, (self.x, self.y))
+		surface.blit(platform_surf, (int(self.x), int(self.y)))
