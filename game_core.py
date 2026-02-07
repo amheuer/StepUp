@@ -18,6 +18,9 @@ from config import (
 	COLOR_BARS_TEXT,
 	COLOR_GAME_OVER,
 	COLOR_TEXT,
+	CV_MOVE_X_SCALE,
+	CV_MOVE_DEADZONE,
+	CV_JUMP_SPEED_SCALE,
 	FPS,
 	SCROLL_THRESHOLD,
 	UI_FONT_SIZE,
@@ -28,7 +31,11 @@ from config import (
 	COIN_VALUE,
 	INTENSITY,
 	PLAYER_RADIUS,
+	PLAYER_MAX_X_SPEED,
+	PLAYER_MAX_SPEED,
 	PLAYER_HEIGHT_METERS,
+	PLATFORM_IGNORE_TIME,
+	JUMP_REARM_TIME,
 )
 from entities import Player, Platform
 from platforms import create_initial_platforms, generate_new_platforms
@@ -99,11 +106,24 @@ class Game:
 		self.menu_pattern_surface = None
 		self.menu_pattern_size = (0, 0)
 		self.cv = None
-		self.cv_state = CVState(zone=None, jump_active=False, debug_frame=None, timestamp=0.0, has_person=False)
+		self.cv_state = CVState(
+			zone=None,
+			jump_active=False,
+			jump_vector=None,
+			center=None,
+			center_velocity=None,
+			debug_frame=None,
+			timestamp=0.0,
+			has_person=False,
+		)
 		self.countdown_active = False
 		self.countdown_remaining = 0.0
 		self.landing_stick_timer = 0.0
-		self.landing_stick_duration = 0.2
+		self.landing_stick_duration = 0.0
+		self.last_jump_vector = None
+		self.prev_jump_active = False
+		self.jump_flash_timer = 0.0
+		self.last_jump_triggered = False
 
 		self.reset()
 		self.running = True
@@ -155,6 +175,10 @@ class Game:
 		self.countdown_active = True
 		self.countdown_remaining = 3.0
 		self.landing_stick_timer = 0.0
+		self.last_jump_vector = None
+		self.prev_jump_active = False
+		self.jump_flash_timer = 0.0
+		self.last_jump_triggered = False
 
 	def _update_calories(self):
 		"""Return calories per minute based on intensity."""
@@ -335,6 +359,23 @@ class Game:
 		if gx < 0 or gy < 0 or gx > WINDOW_WIDTH or gy > WINDOW_HEIGHT:
 			return None
 		return (gx, gy)
+	
+	def _map_jump_vector(self, cv_vector):
+		if not cv_vector:
+			return None
+		vx, vy = cv_vector
+		speed = math.hypot(vx, vy)
+		if speed <= 1e-6:
+			return None
+		nx = vx / speed
+		ny = vy / speed
+		# Rescale angle from +/-90 around vertical to +/-35 around vertical.
+		theta = math.atan2(nx, -ny)
+		clamped = max(-math.pi / 2, min(math.pi / 2, theta))
+		scaled = (clamped / (math.pi / 2)) * math.radians(35)
+		sin_t = math.sin(scaled)
+		cos_t = math.cos(scaled)
+		return (sin_t, -cos_t)
 
 	def _build_bar_pattern(self, width, height):
 		"""Create a subtle square pattern for the side bars."""
@@ -522,13 +563,33 @@ class Game:
 		if self.cv:
 			self.cv_state = self.cv.get_state()
 		else:
-			self.cv_state = CVState(zone=None, jump_active=False, debug_frame=None, timestamp=0.0, has_person=False)
+			self.cv_state = CVState(
+				zone=None,
+				jump_active=False,
+				jump_vector=None,
+				center=None,
+				center_velocity=None,
+				debug_frame=None,
+				timestamp=0.0,
+				has_person=False,
+			)
 
-		move_dir = 0
-		if self.cv_state.zone == "LEFT":
-			move_dir = -1
-		elif self.cv_state.zone == "RIGHT":
-			move_dir = 1
+		if self.cv_state.jump_vector is not None:
+			self.last_jump_vector = self.cv_state.jump_vector
+		jump_vector = None
+		if self.cv_state.jump_active and self.last_jump_vector is not None:
+			jump_vector = self._map_jump_vector(self.last_jump_vector)
+
+		if self.player.ignore_platform_timer > 0:
+			self.player.ignore_platform_timer = max(0.0, self.player.ignore_platform_timer - dt)
+
+		move_vx = 0.0
+		if self.cv_state.center_velocity is not None:
+			move_vx = self.cv_state.center_velocity[0] * CV_MOVE_X_SCALE
+			if abs(move_vx) < CV_MOVE_DEADZONE:
+				move_vx = 0.0
+		move_vx = max(-PLAYER_MAX_X_SPEED, min(PLAYER_MAX_X_SPEED, move_vx))
+
 		jump_allowed = True
 
 		if self.player.y < prev_y:
@@ -547,11 +608,19 @@ class Game:
 		self.player.on_platform = False
 
 		# Check if player is on a platform
-		platform_below = check_if_on_platform(self.player, self.platforms, prev_y)
+		platform_below = None
+		if self.player.ignore_platform_timer <= 0:
+			platform_below = check_if_on_platform(self.player, self.platforms, prev_y)
+
 		if platform_below:
 			self.player.on_platform = True
+			self.player.vx = 0
 			self.player.vy = 0  # Stop velocity when on platform (gravity won't apply while on platform)
-			self.player.can_jump = True  # Allow player to jump
+			self.player.y = platform_below.y - self.player.radius
+			if self.player.time_since_jump is None or self.player.time_since_jump >= JUMP_REARM_TIME:
+				self.player.can_jump = True  # Allow player to jump
+				if not self.cv_state.jump_active:
+					self.prev_jump_active = False
 			self.player.x += platform_below.vx * dt
 			min_x = platform_below.x + self.player.radius
 			max_x = platform_below.x + platform_below.w - self.player.radius
@@ -571,10 +640,24 @@ class Game:
 		else:
 			self.landing_stick_timer = 0.0
 
+		jump_triggered = self.cv_state.jump_active and not self.prev_jump_active
+		self.last_jump_triggered = jump_triggered
+
+
 		# Update entities
-		self.player.update(dt, move_dir, self.cv_state.jump_active and jump_allowed)
+		self.player.update(dt, move_vx, jump_triggered and jump_allowed, jump_vector)
 		if play_sfx and self.player.jumped_this_frame:
 			self.sfx["jump.wav"].play()
+			self.jump_flash_timer = 0.4
+		if self.player.jumped_this_frame:
+			self.player.ignore_platform_timer = PLATFORM_IGNORE_TIME
+		if platform_below and self.player.on_platform and self.player.ignore_platform_timer <= 0:
+			self.player.y = platform_below.y - self.player.radius
+			min_x = platform_below.x + self.player.radius
+			max_x = platform_below.x + platform_below.w - self.player.radius
+			if max_x < min_x:
+				max_x = min_x
+			self.player.x = max(min_x, min(max_x, self.player.x))
 
 		# Handle scrolling
 		if self.player.y < SCROLL_THRESHOLD:
@@ -634,6 +717,11 @@ class Game:
 			if self.user_save_timer >= 5.0:
 				self._save_users()
 				self.user_save_timer = 0.0
+		
+		if self.jump_flash_timer > 0:
+			self.jump_flash_timer = max(0.0, self.jump_flash_timer - dt)
+
+		self.prev_jump_active = self.cv_state.jump_active
 
 	def draw_background(self):
 		"""Draw layered background with parallax bubbles."""
@@ -824,45 +912,58 @@ class Game:
 
 		self._draw_controls_widget(x, y, controls_w, controls_h)
 		debug_h = self._estimate_debug_height(debug_target_w)
-		self._draw_debug_frame(x, y - debug_gap - debug_h, debug_target_w)
+		debug_top = y - debug_gap - debug_h
+		if self.jump_flash_timer > 0:
+			label = self.subtitle_font.render("JUMP", True, COLOR_BARS_TEXT)
+			self.screen.blit(label, (x, debug_top - label.get_height() - 6))
+		self._draw_debug_frame(x, debug_top, debug_target_w)
 
 	def _draw_controls_widget(self, x, y, w, h):
 		active_color = (*COLOR_BARS_TEXT, 220)
-		inactive_color = (*COLOR_BARS_TEXT, 70)
 		surf = pygame.Surface((w, h), pygame.SRCALPHA)
 
-		center = (w // 2, int(h * 0.68))
-		arrow_size = 27
-		circle_radius = 15
+		center = (w // 2, h // 2)
+		arrow_size = 32
 
-		zone = self.cv_state.zone
-		jump_active = self.cv_state.jump_active
+		vec = None
+		if self.cv_state.jump_active and self.cv_state.jump_vector is not None:
+			vec = self.cv_state.jump_vector
+		elif self.cv_state.center_velocity is not None:
+			vx, vy = self.cv_state.center_velocity
+			if math.hypot(vx, vy) >= CV_MOVE_DEADZONE:
+				vec = self.cv_state.center_velocity
 
-		self._draw_arrow(
+		self._draw_direction_arrow(
 			surf,
-			(center[0], int(h * 0.22)),
-			"up",
+			center,
 			arrow_size,
-			active_color if jump_active else inactive_color,
+			vec,
+			active_color,
 		)
-		self._draw_arrow(surf, (24, center[1]), "left", arrow_size, active_color if zone == "LEFT" else inactive_color)
-		self._draw_arrow(surf, (w - 24, center[1]), "right", arrow_size, active_color if zone == "RIGHT" else inactive_color)
-
-		circle_color = active_color if zone == "CENTER" else inactive_color
-		pygame.draw.circle(surf, circle_color, center, circle_radius, 0)
-
+		
 		self.screen.blit(surf, (x, y))
 
-	def _draw_arrow(self, surf, center, direction, size, color):
+	def _draw_direction_arrow(self, surf, center, size, vector, color):
 		cx, cy = center
-		if direction == "up":
-			points = [(cx, cy - size), (cx - size, cy + size), (cx + size, cy + size)]
-		elif direction == "left":
-			points = [(cx - size, cy), (cx + size, cy - size), (cx + size, cy + size)]
-		elif direction == "right":
-			points = [(cx + size, cy), (cx - size, cy - size), (cx - size, cy + size)]
+		if vector is None:
+			vx, vy = 0.0, -1.0
 		else:
-			return
+			vx, vy = vector
+			if abs(vx) < 1e-3 and abs(vy) < 1e-3:
+				vx, vy = 0.0, -1.0
+		angle = math.atan2(vy, vx) + math.pi / 2.0
+		cos_a = math.cos(angle)
+		sin_a = math.sin(angle)
+
+		head = (0, -size)
+		left = (-size * 0.5, size * 0.6)
+		right = (size * 0.5, size * 0.6)
+
+		def rot(pt):
+			px, py = pt
+			return (cx + px * cos_a - py * sin_a, cy + px * sin_a + py * cos_a)
+
+		points = [rot(head), rot(left), rot(right)]
 		pygame.draw.polygon(surf, color, points, 0)
 
 	def _draw_debug_frame(self, x, y, target_w):

@@ -24,6 +24,8 @@ import time
 import json
 import logging
 import threading
+import math
+from collections import deque
 from dataclasses import asdict, dataclass
 from typing import List, Tuple, Optional
 
@@ -42,7 +44,7 @@ except Exception as e:
 # Top-level hyperparameters (edit these)
 # -----------------------
 CONFIDENCE_THRESH = 0.35   # detection confidence threshold (0.0 - 1.0)
-MAX_DETECTIONS = 1         # maximum number of person detections to process (you asked for 1)
+MAX_DETECTIONS = 5         # maximum number of person detections to process (you asked for 1)
 IOU_NMS = 0.45             # iou/nms threshold if you want to use in model.predict (left as var)
 USE_USB_WEBCAM = False      # True = use USB webcam index, False = use built-in/default camera
 WEBCAM_INDEX = 1           # USB webcam index (set to your USB device)
@@ -58,9 +60,14 @@ FOCUS_ONE_PERSON = True    # true = only process the top person detection
 ZONE_LEFT_PCT = 0.40
 ZONE_CENTER_PCT = 0.25
 ZONE_ALPHA = 0.20
-JUMP_FRAMES_UP = 4
-JUMP_MIN_DELTA_PX = 4
-JUMP_HOLD_FRAMES = 20
+JUMP_FRAMES_UP = 6
+JUMP_MIN_DELTA_PX = 6
+JUMP_HOLD_FRAMES = 4
+CENTER_VEL_WINDOW = 4
+CENTER_VEL_MIN_FRAMES = 3
+CENTER_MIN_UP_PX = 15
+CENTER_MIN_ANGLE_DEG = 35
+CENTER_KEYPOINTS = (0, 5, 6, 11, 12, 13, 14)
 # -----------------------
 
 # Keypoint indices (COCO-style ordering from user)
@@ -169,17 +176,25 @@ def compute_zone_edges(width, left_pct, center_pct):
     right_start = left_w + center_w
     return left_w, right_start
 
-def classify_zone(x_center, left_edge, right_edge):
-    if x_center < left_edge:
-        return "LEFT"
-    if x_center > right_edge:
-        return "RIGHT"
-    return "CENTER"
+def compute_center(keypoints):
+    points = []
+    for idx in CENTER_KEYPOINTS:
+        if idx < len(keypoints):
+            xk, yk, kc = keypoints[idx]
+            if kc > 0:
+                points.append((xk, yk))
+    if not points:
+        return None
+    xs, ys = zip(*points)
+    return (float(sum(xs) / len(xs)), float(sum(ys) / len(ys)))
 
 @dataclass
 class CVState:
     zone: Optional[str]
     jump_active: bool
+    jump_vector: Optional[Tuple[float, float]]
+    center: Optional[Tuple[float, float]]
+    center_velocity: Optional[Tuple[float, float]]
     debug_frame: Optional[np.ndarray]
     timestamp: float
     has_person: bool
@@ -209,13 +224,18 @@ class CVController:
         self._thread = None
         self._last_frame_time = 0.0
 
-        self._jump_up_count = 0
+        
         self._jump_display_frames = 0
-        self._prev_leg_y = None
+        self._center_history = deque(maxlen=CENTER_VEL_WINDOW)
+        self._last_center_velocity = None
+        self._last_jump_vector = None
 
         self._state = CVState(
             zone=None,
             jump_active=False,
+            jump_vector=None,
+            center=None,
+            center_velocity=None,
             debug_frame=None,
             timestamp=time.time(),
             has_person=False,
@@ -275,16 +295,22 @@ class CVController:
             return CVState(
                 zone=self._state.zone,
                 jump_active=self._state.jump_active,
+                jump_vector=self._state.jump_vector,
+                center=self._state.center,
+                center_velocity=self._state.center_velocity,
                 debug_frame=None if self._state.debug_frame is None else self._state.debug_frame.copy(),
                 timestamp=self._state.timestamp,
                 has_person=self._state.has_person,
             )
 
-    def _update_state(self, zone, jump_active, debug_frame, has_person):
+    def _update_state(self, zone, jump_active, jump_vector, center, center_velocity, debug_frame, has_person):
         with self._lock:
             self._state = CVState(
                 zone=zone,
                 jump_active=jump_active,
+                jump_vector=jump_vector,
+                center=center,
+                center_velocity=center_velocity,
                 debug_frame=debug_frame,
                 timestamp=time.time(),
                 has_person=has_person,
@@ -307,7 +333,6 @@ class CVController:
             frame = cv2.flip(frame, 1)
 
             h, w = frame.shape[:2]
-            left_edge, right_edge = compute_zone_edges(w, self.left_pct, self.center_pct)
             if self.debug_draw:
                 draw_zones_overlay(frame, self.left_pct, self.center_pct, ZONE_ALPHA)
 
@@ -329,7 +354,7 @@ class CVController:
                 )
             except Exception:
                 logger.exception("Detection model inference failed.")
-                self._update_state(None, False, frame, False)
+                self._update_state(None, False, None, None, None, frame, False)
                 continue
 
             det_res = det_results[0] if isinstance(det_results, (list, tuple)) else det_results
@@ -376,16 +401,27 @@ class CVController:
                 person_scores.append(scores[idx] if len(scores) > idx else 0.0)
 
             if len(person_boxes) == 0:
+                self._center_history.clear()
+                self._last_center_velocity = None
                 if self._jump_display_frames > 0:
                     self._jump_display_frames -= 1
                 jump_active = self._jump_display_frames > 0
-                self._update_state(None, jump_active, frame, False)
+                jump_vector = self._last_jump_vector if jump_active else None
+                self._update_state(None, jump_active, jump_vector, None, None, frame, False)
                 if self.show_window:
                     cv2.imshow("YOLO11n Person+Pose", frame)
                     cv2.waitKey(1)
                 continue
 
-            person_order = sorted(range(len(person_boxes)), key=lambda i: person_scores[i], reverse=True)
+            def box_area(box):
+                x1, y1, x2, y2 = box
+                return max(0.0, x2 - x1) * max(0.0, y2 - y1)
+
+            person_order = sorted(
+                range(len(person_boxes)),
+                key=lambda i: box_area(person_boxes[i]),
+                reverse=True,
+            )
             if FOCUS_ONE_PERSON:
                 person_order = person_order[:1]
             else:
@@ -393,12 +429,12 @@ class CVController:
 
             zone = None
             keypoints_out = []
+            center = None
+            center_velocity = None
             for p_i in person_order:
                 box = person_boxes[p_i]
                 conf = float(person_scores[p_i]) if len(person_scores) > p_i else 0.0
                 x1, y1, x2, y2 = [int(round(x)) for x in box]
-                bbox_center_x = int(round((x1 + x2) / 2))
-                zone = classify_zone(bbox_center_x, left_edge, right_edge)
                 crop = crop_with_padding(frame, (x1, y1, x2, y2))
                 keypoints_out = []
 
@@ -460,30 +496,40 @@ class CVController:
                     draw_bbox_and_label(frame, (x1, y1, x2, y2), f"person {conf:.2f}")
                     draw_keypoints_and_skeleton(frame, keypoints_out, offset=(0, 0))
 
-                leg_indices = [11, 12, 13, 14]
-                leg_points = []
-                for idx in leg_indices:
-                    if idx < len(keypoints_out):
-                        xk, yk, kc = keypoints_out[idx]
-                        if kc > 0:
-                            leg_points.append(yk)
-                if leg_points:
-                    curr_leg_y = float(np.mean(leg_points))
-                    if self._prev_leg_y is not None and (self._prev_leg_y - curr_leg_y) >= JUMP_MIN_DELTA_PX:
-                        self._jump_up_count += 1
-                    else:
-                        self._jump_up_count = 0
-                    self._prev_leg_y = curr_leg_y
-                    if self._jump_up_count >= JUMP_FRAMES_UP:
-                        self._jump_display_frames = JUMP_HOLD_FRAMES
-                        self._jump_up_count = 0
+                center = compute_center(keypoints_out)
+                center_velocity = None
+                jump_vector = None
+                if center:
+                    sample_time = time.time()
+                    self._center_history.append((sample_time, center[0], center[1]))
                 else:
-                    self._jump_up_count = 0
+                    self._center_history.clear()
+                    self._last_center_velocity = None
+
+                if len(self._center_history) >= CENTER_VEL_MIN_FRAMES:
+                    t0, x0, y0 = self._center_history[0]
+                    t1, x1, y1 = self._center_history[-1]
+                    dt_window = t1 - t0
+                    if dt_window > 0:
+                        dx = x1 - x0
+                        dy = y1 - y0
+                        center_velocity = (dx / dt_window, dy / dt_window)
+                        self._last_center_velocity = center_velocity
+                        up_pixels = y0 - y1
+                        if up_pixels > 0:
+                            angle = math.degrees(math.atan2(up_pixels, max(1e-6, abs(dx))))
+                            if up_pixels >= CENTER_MIN_UP_PX and angle >= CENTER_MIN_ANGLE_DEG:
+                                jump_vector = center_velocity
+
+                if jump_vector is not None:
+                    self._jump_display_frames = JUMP_HOLD_FRAMES
+                    self._last_jump_vector = jump_vector
 
             if self._jump_display_frames > 0:
                 self._jump_display_frames -= 1
             jump_active = self._jump_display_frames > 0
-            self._update_state(zone, jump_active, frame, True)
+            jump_vector = self._last_jump_vector if jump_active else None
+            self._update_state(zone, jump_active, jump_vector, center, center_velocity, frame, True)
 
             if self.show_window:
                 cv2.imshow("YOLO11n Person+Pose", frame)
@@ -535,9 +581,9 @@ def run():
     fps = 0.0
     last_frame_time = 0.0
     # Jump detection state
-    jump_up_count = 0
     jump_display_frames = 0
-    prev_leg_y = None
+    center_history = deque(maxlen=CENTER_VEL_WINDOW)
+    last_jump_vector = None
     # Jump detection state uses top-level JUMP_* constants
     logger.info("Starting webcam loop. Press 'q' to quit.")
     try:
@@ -554,12 +600,13 @@ def run():
 
             frame_idx += 1
             h, w = frame.shape[:2]
-            left_edge, right_edge = draw_zones_overlay(
-                frame,
-                left_pct=ZONE_LEFT_PCT,
-                center_pct=ZONE_CENTER_PCT,
-                alpha=ZONE_ALPHA,
-            )
+            if SHOW_FPS:
+                draw_zones_overlay(
+                    frame,
+                    left_pct=ZONE_LEFT_PCT,
+                    center_pct=ZONE_CENTER_PCT,
+                    alpha=ZONE_ALPHA,
+                )
 
             # Run detector on the whole frame. Set save=False / verbose=False in predict if needed.
             # We use model.predict to allow passing conf and iou args (if API supports).
@@ -647,6 +694,7 @@ def run():
             # If empty, nothing to do this frame
             detection_logs: List[DetectionLog] = []
             if len(person_boxes) == 0:
+                center_history.clear()
                 # update jump display decay even if no person
                 if jump_display_frames > 0:
                     jump_display_frames -= 1
@@ -667,8 +715,17 @@ def run():
                     break
                 continue
 
-            # Sort persons by score desc and respect MAX_DETECTIONS / FOCUS_ONE_PERSON
-            person_order = sorted(range(len(person_boxes)), key=lambda i: person_scores[i], reverse=True)
+            def box_area(box):
+                x1, y1, x2, y2 = box
+                return max(0.0, x2 - x1) * max(0.0, y2 - y1)
+
+            # Sort persons by area desc and respect MAX_DETECTIONS / FOCUS_ONE_PERSON
+            person_order = sorted(
+                range(len(person_boxes)),
+                key=lambda i: box_area(person_boxes[i]),
+                reverse=True,
+            )
+
             if FOCUS_ONE_PERSON:
                 person_order = person_order[:1]
             else:
@@ -679,8 +736,6 @@ def run():
                 box = person_boxes[p_i]  # [x1,y1,x2,y2]
                 conf = float(person_scores[p_i]) if len(person_scores) > p_i else 0.0
                 x1, y1, x2, y2 = [int(round(x)) for x in box]
-                bbox_center_x = int(round((x1 + x2) / 2))
-                zone = classify_zone(bbox_center_x, left_edge, right_edge)
                 # crop ROI
                 crop = crop_with_padding(frame, (x1, y1, x2, y2))
                 keypoints_out = []
@@ -762,26 +817,23 @@ def run():
                 draw_bbox_and_label(frame, (x1, y1, x2, y2), f"person {conf:.2f}")
                 draw_keypoints_and_skeleton(frame, keypoints_out, offset=(0,0))
 
-                # Jump detection using knees and hips (positive change in height = y decreases)
-                leg_indices = [11, 12, 13, 14]
-                leg_points = []
-                for idx in leg_indices:
-                    if idx < len(keypoints_out):
-                        xk, yk, kc = keypoints_out[idx]
-                        if kc > 0:
-                            leg_points.append(yk)
-                if leg_points:
-                    curr_leg_y = float(np.mean(leg_points))
-                    if prev_leg_y is not None and (prev_leg_y - curr_leg_y) >= JUMP_MIN_DELTA_PX:
-                        jump_up_count += 1
-                    else:
-                        jump_up_count = 0
-                    prev_leg_y = curr_leg_y
-                    if jump_up_count >= JUMP_FRAMES_UP:
-                        jump_display_frames = JUMP_HOLD_FRAMES
-                        jump_up_count = 0
-                else:
-                    jump_up_count = 0
+                #
+                center = compute_center(keypoints_out)
+                if center:
+                    center_history.append((time.time(), center[0], center[1]))
+                if len(center_history) >= CENTER_VEL_MIN_FRAMES:
+                    t0, x0, y0 = center_history[0]
+                    t1, x1c, y1c = center_history[-1]
+                    dt_window = t1 - t0
+                    if dt_window > 0:
+                        dx = x1c - x0
+                        dy = y1c - y0
+                        up_pixels = y0 - y1c
+                        if up_pixels > 0:
+                            angle = math.degrees(math.atan2(up_pixels, max(1e-6, abs(dx))))
+                            if up_pixels >= CENTER_MIN_UP_PX and angle >= CENTER_MIN_ANGLE_DEG:
+                                jump_display_frames = JUMP_HOLD_FRAMES
+                                last_jump_vector = (dx / dt_window, dy / dt_window)
 
                 # Build detection log entry
                 log_entry = DetectionLog(
@@ -801,7 +853,6 @@ def run():
             t_prev = t_now
             if SHOW_FPS:
                 cv2.putText(frame, f"FPS: {fps:.1f}", (10, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0,255,255), 2)
-            cv2.putText(frame, f"ZONE: {zone}", (10, 45), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255,255,255), 2)
             if jump_display_frames > 0:
                 jump_display_frames -= 1
             cv2.putText(frame, f"JUMPING: {'YES' if jump_display_frames > 0 else 'NO'}", (10, 70), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255,255,255), 2)

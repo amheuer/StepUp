@@ -5,6 +5,7 @@ import random
 from config import (
 	FRAGILE_PLATFORM_CHANCE,
 	MAX_PLATFORM_GAP,
+	MIN_PLATFORM_GAP,
 	MOVING_PLATFORM_CHANCE,
 	PLATFORM_BASE_WIDTH,
 	PLATFORM_HEIGHT,
@@ -49,7 +50,7 @@ def create_initial_platforms():
 			)
 		)
 		gap_max = MAX_PLATFORM_GAP if kind != "moving" else 140
-		y -= random.randint(60, gap_max)
+		y -= random.randint(MIN_PLATFORM_GAP, gap_max)
 		if len(platforms) > 40:
 			break
 
@@ -70,7 +71,7 @@ def generate_new_platforms(platforms):
 		else:
 			kind = "normal"
 		gap_max = MAX_PLATFORM_GAP if kind != "moving" else 140
-		new_y = top_y - random.randint(60, gap_max)
+		new_y = top_y - random.randint(MIN_PLATFORM_GAP, gap_max)
 		new_platform = Platform(
 			new_x,
 			new_y,
