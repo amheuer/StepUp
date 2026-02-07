@@ -1135,29 +1135,107 @@ class Game:
 		"""Draw score and game over text."""
 		self.game_over_rect = None
 		if self.game_over:
+			def render_scaled(text, scale):
+				surf = self.font.render(text, True, COLOR_GAME_OVER)
+				if scale != 1:
+					surf = pygame.transform.smoothscale(
+						surf,
+						(
+							max(1, int(surf.get_width() * scale)),
+							max(1, int(surf.get_height() * scale)),
+						),
+					)
+				return surf
+
+			panel_w = int(WINDOW_WIDTH * 0.8)
+			panel_h = int(WINDOW_HEIGHT * 0.68)
+			panel_x = (WINDOW_WIDTH - panel_w) // 2
+			panel_y = (WINDOW_HEIGHT - panel_h) // 2
+			panel_rect = pygame.Rect(panel_x, panel_y, panel_w, panel_h)
+			pygame.draw.rect(self.game_surface, COLOR_BARS, panel_rect)
+			pygame.draw.rect(self.game_surface, (0, 0, 0), panel_rect, 2)
+
+			title = render_scaled("ROUND SUMMARY", 0.5)
+			self.game_surface.blit(
+				title,
+				(panel_x + (panel_w - title.get_width()) // 2, panel_y + 12),
+			)
+
+			per_hour_stepup = float(cfg.INTENSITY.value)
+			per_hour_jog = 8.5
+			per_hour_walk = 4.0
+			balance = self._compute_balance_ability()
+			max_jump = self._format_feet_inches(self.max_jump_height_ft).upper()
+			avg_jump = self._format_feet_inches(self.avg_jump_height_ft).upper()
+			avg_shuffle = f"{self.avg_shuffle_speed_fps:.2f} FT/S"
+			max_shuffle = f"{self.max_shuffle_speed_fps:.2f} FT/S"
+			metric_lines = [
+				f"BALANCE: {balance:.2f}",
+				f"MAX JUMP HEIGHT: {max_jump}",
+				f"AVG JUMP HEIGHT: {avg_jump}",
+				f"AVG SHUFFLE SPEED: {avg_shuffle}",
+				f"MAX SHUFFLE SPEED: {max_shuffle}",
+			]
+			metrics_y = panel_y + 12 + title.get_height() + 12
+			last_metric_y = metrics_y
+			line_gap = 6
+			for i, line in enumerate(metric_lines):
+				text = render_scaled(line, 0.4)
+				line_y = metrics_y + i * (text.get_height() + line_gap)
+				self.game_surface.blit(text, (panel_x + 24, line_y))
+				last_metric_y = line_y + text.get_height()
+
 			selected = self.hover_game_over or True
 			prefix = "> " if selected else "  "
-			label = f"GAME OVER - {prefix}RESTART"
-			game_over_text = self.font.render(label, True, COLOR_GAME_OVER)
-			game_over_text = pygame.transform.smoothscale(
-				game_over_text,
-				(
-					max(1, game_over_text.get_width() // 2.5),
-					max(1, game_over_text.get_height() // 2.5),
-				),
+			label = f"{prefix}RESTART"
+			game_over_text = render_scaled(label, 0.4)
+			btn_w = game_over_text.get_width() + 16
+			btn_h = game_over_text.get_height() + 10
+			btn_x = panel_x + (panel_w - btn_w) // 2
+			btn_y = panel_y + panel_h - btn_h - 12
+			btn_rect = pygame.Rect(btn_x, btn_y, btn_w, btn_h)
+
+			# Bar graph: calories per hour comparison
+			graph_w = panel_w - 48
+			graph_x = panel_x + 24
+			graph_label = render_scaled("AVG CALORIES BURNED PER HOUR", 0.3)
+			graph_label_h = graph_label.get_height()
+			label_sample = render_scaled("GAME", 0.3)
+			label_h = label_sample.get_height()
+			graph_bottom = min(panel_y + panel_h - 16, btn_y - 8 - label_h)
+			graph_top = last_metric_y + 20 + graph_label_h
+			graph_h = max(36, graph_bottom - graph_top)
+			graph_y = graph_bottom - graph_h
+			max_val = max(per_hour_stepup, per_hour_jog, per_hour_walk, 1.0)
+			bars = [
+				("WALKING", per_hour_walk, (80, 80, 80)),
+				("JOGGING", per_hour_jog, (40, 40, 40)),
+				("STEPUP", per_hour_stepup, (0, 0, 0)),
+			]
+			bar_gap = 12
+			bar_w = (graph_w - bar_gap * (len(bars) - 1)) // len(bars)
+			self.game_surface.blit(
+				graph_label,
+				(panel_x + (panel_w - graph_label.get_width()) // 2, graph_y - graph_label_h - 10),
 			)
-			box_padding = 10
-			box_w = game_over_text.get_width() + box_padding * 2
-			box_h = game_over_text.get_height() + box_padding * 2
-			box_x = (WINDOW_WIDTH - box_w) // 2
-			box_y = WINDOW_HEIGHT // 2 - 20 - box_padding
-			box_rect = pygame.Rect(box_x, box_y, box_w, box_h)
-			pygame.draw.rect(self.game_surface, COLOR_BARS, box_rect)
-			pygame.draw.rect(self.game_surface, (0, 0, 0), box_rect, 2)
-			x = box_x + box_padding
-			y = box_y + box_padding
-			self.game_surface.blit(game_over_text, (x, y))
-			self.game_over_rect = box_rect
+			for i, (label, val, color) in enumerate(bars):
+				bar_h = int((val / max_val) * graph_h)
+				bx = graph_x + i * (bar_w + bar_gap)
+				by = graph_y + (graph_h - bar_h)
+				pygame.draw.rect(self.game_surface, color, pygame.Rect(bx, by, bar_w, bar_h))
+				lbl = render_scaled(label, 0.3)
+				self.game_surface.blit(
+					lbl,
+					(bx + (bar_w - lbl.get_width()) // 2, graph_y + graph_h + 2),
+				)
+
+			pygame.draw.rect(self.game_surface, COLOR_BARS, btn_rect)
+			pygame.draw.rect(self.game_surface, (0, 0, 0), btn_rect, 2)
+			self.game_surface.blit(
+				game_over_text,
+				(btn_x + (btn_w - game_over_text.get_width()) // 2, btn_y + 5),
+			)
+			self.game_over_rect = btn_rect
 		if self.paused:
 			title = self.font.render("SETTINGS", True, COLOR_GAME_OVER)
 			title = pygame.transform.smoothscale(
