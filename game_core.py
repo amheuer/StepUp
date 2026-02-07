@@ -76,6 +76,7 @@ MENU_BG_PATH = (
 )
 USERS_PATH = Path(__file__).resolve().parent / "users.json"
 PLAYER_DIR = Path(__file__).resolve().parent / "assets" / "player_images"
+JUMP_UPWARD_THRESHOLD_PX = 5.0
 
 
 class Game:
@@ -123,6 +124,7 @@ class Game:
 			jump_vector=None,
 			center=None,
 			center_velocity=None,
+			bbox_center=None,
 			debug_frame=None,
 			timestamp=0.0,
 			has_person=False,
@@ -136,6 +138,9 @@ class Game:
 		self.jump_flash_timer = 0.0
 		self.last_jump_triggered = False
 		self.prev_game_over = False
+		self.pixels_per_foot = None
+		self.pixels_per_foot_sum = 0.0
+		self.pixels_per_foot_count = 0
 
 		self.reset()
 		self.running = True
@@ -204,6 +209,9 @@ class Game:
 		self.last_jump_triggered = False
 		self.prev_game_over = False
 		self._reset_balance_tracking()
+		self._reset_motion_metrics()
+		self.pixels_per_foot_sum = 0.0
+		self.pixels_per_foot_count = 0
 
 	def _update_calories(self):
 		"""Return calories per minute based on intensity."""
@@ -231,8 +239,17 @@ class Game:
 				"lifetime_calories": 0.0,
 				"minutes_played": 0.0,
 				"balance_ability": 0.0,
+				"max_jump_height_ft": 0.0,
+				"avg_jump_height_ft": 0.0,
+				"max_shuffle_speed_fps": 0.0,
+				"avg_shuffle_speed_fps": 0.0,
+				"pixels_per_foot": None,
 			}
 		self.current_user = key
+		self.pixels_per_foot = self.users[key].get("pixels_per_foot")
+		if self.pixels_per_foot:
+			self.pixels_per_foot_sum = self.pixels_per_foot
+			self.pixels_per_foot_count = 1
 
 	def _reset_balance_tracking(self):
 		self.balance_jump_v_sum = 0.0
@@ -243,6 +260,135 @@ class Game:
 		self.balance_time_no_moves = 0.0
 		self.balance_jump_in_progress = False
 		self.balance_shuffle_in_progress = False
+
+	def _reset_motion_metrics(self):
+		self.jump_metric_active = False
+		self.jump_metric_time = 0.0
+		self.jump_start_y = None
+		self.prev_bbox_center = None
+		self.prev_bbox_time = None
+		self.last_bbox_dy = None
+		self.max_jump_height_ft = 0.0
+		self.avg_jump_height_ft = 0.0
+		self.jump_count = 0
+		self.shuffle_metric_active = False
+		self.shuffle_sum = 0.0
+		self.shuffle_time = 0.0
+		self.max_shuffle_speed_fps = 0.0
+		self.avg_shuffle_speed_fps = 0.0
+		self.shuffle_count = 0
+
+	def _maybe_finalize_jump(self, time_to_apex, start_y, apex_y):
+		if time_to_apex <= 0:
+			return
+		height_ft = 0.5 * 32.174 * (time_to_apex ** 2)
+		if self.in_tutorial:
+			if (
+				start_y is not None
+				and apex_y is not None
+				and height_ft > 0
+			):
+				pixel_delta = abs(start_y - apex_y)
+				if pixel_delta > 0:
+					self.pixels_per_foot_sum += pixel_delta / height_ft
+					self.pixels_per_foot_count += 1
+					self.pixels_per_foot = self.pixels_per_foot_sum / self.pixels_per_foot_count
+					if self.current_user:
+						user = self.users.get(self.current_user)
+						if user is not None:
+							user["pixels_per_foot"] = self.pixels_per_foot
+							self._save_users()
+			return
+		self.jump_count += 1
+		self.avg_jump_height_ft += (height_ft - self.avg_jump_height_ft) / self.jump_count
+		if height_ft > self.max_jump_height_ft:
+			self.max_jump_height_ft = height_ft
+
+	def _finalize_shuffle(self):
+		if self.shuffle_time <= 0:
+			return
+		avg_speed = self.shuffle_sum / self.shuffle_time
+		self.shuffle_count += 1
+		self.avg_shuffle_speed_fps += (avg_speed - self.avg_shuffle_speed_fps) / self.shuffle_count
+		if avg_speed > self.max_shuffle_speed_fps:
+			self.max_shuffle_speed_fps = avg_speed
+		self.shuffle_sum = 0.0
+		self.shuffle_time = 0.0
+
+	def _update_motion_metrics(self, dt):
+		if self.in_tutorial and self.pixels_per_foot is not None:
+			return
+		has_bbox = self.cv_state.bbox_center is not None
+		has_vel = self.cv_state.center_velocity is not None
+		if has_bbox:
+			curr_t = self.cv_state.timestamp
+			curr_y = self.cv_state.bbox_center[1]
+			if self.prev_bbox_center is not None and self.prev_bbox_time is not None:
+				dt_bbox = curr_t - self.prev_bbox_time
+				if dt_bbox > 0:
+					dy = curr_y - self.prev_bbox_center[1]
+					if self.jump_metric_active:
+						self.jump_metric_time += dt_bbox
+						if self.last_bbox_dy is not None and self.last_bbox_dy < 0 and dy >= 0:
+							apex_y = curr_y
+							self._maybe_finalize_jump(self.jump_metric_time, self.jump_start_y, apex_y)
+							self.jump_metric_active = False
+							self.jump_metric_time = 0.0
+							self.jump_start_y = None
+							self.last_bbox_dy = None
+						else:
+							self.last_bbox_dy = dy
+					else:
+						if (
+							self.cv_state.jump_active
+							and dy <= -JUMP_UPWARD_THRESHOLD_PX
+						):
+							self.jump_metric_active = True
+							self.jump_metric_time = 0.0
+							self.jump_start_y = curr_y
+							self.last_bbox_dy = dy
+			self.prev_bbox_center = self.cv_state.bbox_center
+			self.prev_bbox_time = curr_t
+
+		if (not self.in_tutorial) and self.pixels_per_foot and has_vel:
+			vx = self.cv_state.center_velocity[0]
+			shuffle_active = abs(vx) >= CV_MOVE_DEADZONE
+			if shuffle_active:
+				vx_fps = abs(vx) / self.pixels_per_foot
+				if not self.shuffle_metric_active:
+					self.shuffle_metric_active = True
+					self.shuffle_sum = 0.0
+					self.shuffle_time = 0.0
+				self.shuffle_sum += vx_fps * dt
+				self.shuffle_time += dt
+			elif self.shuffle_metric_active:
+				self.shuffle_metric_active = False
+				self._finalize_shuffle()
+
+	def _finalize_motion_metrics(self):
+		if self.shuffle_metric_active:
+			self.shuffle_metric_active = False
+			self._finalize_shuffle()
+		if not self.current_user:
+			return
+		user = self.users.get(self.current_user)
+		if not user:
+			return
+		user["max_jump_height_ft"] = self.max_jump_height_ft
+		user["avg_jump_height_ft"] = self.avg_jump_height_ft
+		user["max_shuffle_speed_fps"] = self.max_shuffle_speed_fps
+		user["avg_shuffle_speed_fps"] = self.avg_shuffle_speed_fps
+		self._save_users()
+
+	def _format_feet_inches(self, feet_value):
+		if feet_value <= 0:
+			return "0ft 0in"
+		feet = int(math.floor(feet_value))
+		inches = int(round((feet_value - feet) * 12))
+		if inches == 12:
+			feet += 1
+			inches = 0
+		return f"{feet}ft {inches}in"
 
 	def _update_balance_tracking(self, dt):
 		if self.in_tutorial:
@@ -766,6 +912,7 @@ class Game:
 				jump_vector=None,
 				center=None,
 				center_velocity=None,
+				bbox_center=None,
 				debug_frame=None,
 				timestamp=0.0,
 				has_person=False,
@@ -788,6 +935,7 @@ class Game:
 		move_vx = max(-PLAYER_MAX_X_SPEED, min(PLAYER_MAX_X_SPEED, move_vx))
 
 		self._update_balance_tracking(dt)
+		self._update_motion_metrics(dt)
 
 		jump_allowed = True
 
@@ -944,6 +1092,7 @@ class Game:
 		self.prev_jump_active = self.cv_state.jump_active
 		if self.game_over and not self.prev_game_over:
 			self._finalize_balance_ability()
+			self._finalize_motion_metrics()
 		self.prev_game_over = self.game_over
 
 	def draw_background(self):
@@ -1387,6 +1536,10 @@ class Game:
 			f"LIFETIME CALORIES: {user.get('lifetime_calories', 0.0):.2f}",
 			f"MINUTES PLAYED: {user.get('minutes_played', 0.0):.1f}",
 			f"BALANCE ABILITY: {user.get('balance_ability', 0.0):.2f}",
+			f"MAX JUMP HEIGHT: {self._format_feet_inches(user.get('max_jump_height_ft', 0.0))}",
+			f"AVG JUMP HEIGHT: {self._format_feet_inches(user.get('avg_jump_height_ft', 0.0))}",
+			f"MAX SHUFFLE SPEED: {user.get('max_shuffle_speed_fps', 0.0):.2f} FT/S",
+			f"AVG SHUFFLE SPEED: {user.get('avg_shuffle_speed_fps', 0.0):.2f} FT/S",
 		]
 		line_surfs = [self.subtitle_font.render(line, True, COLOR_BARS_TEXT) for line in lines]
 		max_w = max(s.get_width() for s in line_surfs)
