@@ -6,9 +6,62 @@ then feeds those boxes into SAM for precise instance segmentation.
 """
 
 import cv2
+import math
 import numpy as np
+import time
 from pathlib import Path
 from ultralytics import YOLO, SAM
+
+
+def capture_from_webcam(save_path: str = "capture.jpg", countdown: int = 5) -> str:
+    """
+    Open the webcam, show a live preview with a countdown timer,
+    then capture and save a frame.
+
+    Args:
+        save_path: Where to save the captured image.
+        countdown: Seconds to wait before capturing.
+
+    Returns:
+        The path to the saved image.
+    """
+    cap = cv2.VideoCapture(0)
+    if not cap.isOpened():
+        raise RuntimeError("Could not open webcam.")
+
+    print(f"[INFO] Webcam opened. Capturing in {countdown} seconds...")
+    start_time = time.time()
+
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            raise RuntimeError("Failed to read from webcam.")
+
+        elapsed = time.time() - start_time
+        remaining = max(0, countdown - elapsed)
+
+        # Draw countdown on the preview (show whole seconds)
+        display = frame.copy()
+        text = str(math.ceil(remaining)) if remaining > 0 else "0"
+        cv2.putText(display, text, (30, 80),
+                    cv2.FONT_HERSHEY_SIMPLEX, 2.5, (0, 0, 255), 4, cv2.LINE_AA)
+        cv2.imshow("Webcam - Get Ready!", display)
+
+        if remaining <= 0:
+            # Capture this frame
+            cv2.imwrite(save_path, frame)
+            print(f"[INFO] Captured image saved to: {save_path}")
+            break
+
+        # Allow quitting early with 'q'
+        if cv2.waitKey(1) & 0xFF == ord('q'):
+            cap.release()
+            cv2.destroyAllWindows()
+            raise RuntimeError("Capture cancelled by user.")
+
+    cap.release()
+    cv2.destroyAllWindows()
+    return save_path
 
 
 def run_yolo_sam_pipeline(
@@ -160,7 +213,10 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="YOLO + SAM: detect objects then segment them."
     )
-    parser.add_argument("image", help="Path to the input image.")
+    parser.add_argument("image", nargs="?", default=None,
+                        help="Path to the input image. Omit to use webcam.")
+    parser.add_argument("--webcam", action="store_true",
+                        help="Capture from webcam with a 5-second countdown.")
     parser.add_argument("--yolo-model", default="yolo11n.pt",
                         help="YOLO model name (default: yolo11n.pt)")
     parser.add_argument("--sam-model", default="sam2_b.pt",
@@ -173,8 +229,14 @@ if __name__ == "__main__":
                         help="Number of grid cells per axis, lower = more pixelated (default: 32)")
     args = parser.parse_args()
 
+    # Determine image source
+    if args.webcam or args.image is None:
+        image_path = capture_from_webcam(save_path="capture.jpg", countdown=5)
+    else:
+        image_path = args.image
+
     run_yolo_sam_pipeline(
-        image_path=args.image,
+        image_path=image_path,
         yolo_model=args.yolo_model,
         sam_model=args.sam_model,
         conf_threshold=args.conf,
