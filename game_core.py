@@ -1002,8 +1002,14 @@ class Game:
 
 	def update(self, dt):
 		"""Update game state."""
-		if self.game_over or self.paused or self.in_menu or self.in_health:
+		if self.in_menu:
+			if not pygame.mixer.music.get_busy():
+				self._play_music(self.menu_music_path, restart=True)
 			return
+		if self.game_over or self.paused or self.in_health:
+			return
+		if not pygame.mixer.music.get_busy():
+			self._play_music(self.game_music_path, restart=True)
 		if self.countdown_active:
 			self.countdown_remaining = max(0.0, self.countdown_remaining - dt)
 			if self.countdown_remaining <= 0.0:
