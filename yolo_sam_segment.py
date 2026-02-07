@@ -49,6 +49,9 @@ def capture_from_webcam(save_path: str = "capture.jpg", countdown: int = 10,
         if not ret:
             raise RuntimeError("Failed to read from webcam.")
 
+        # Mirror the frame so movements match the screen
+        frame = cv2.flip(frame, 1)
+
         elapsed = time.time() - start_time
         remaining = max(0, countdown - elapsed)
 
@@ -325,7 +328,7 @@ if __name__ == "__main__":
     # Determine image source
     if args.capture_poses:
         # Capture all 3 poses then process each
-        captured = capture_all_poses(countdown=5)
+        captured = capture_all_poses(countdown=10)
         for img_path in captured:
             run_yolo_sam_pipeline(
                 image_path=img_path,
@@ -337,7 +340,7 @@ if __name__ == "__main__":
             )
     else:
         if args.webcam or args.image is None:
-            image_path = capture_from_webcam(save_path="capture.jpg", countdown=5)
+            image_path = capture_from_webcam(save_path="capture.jpg", countdown=10)
         else:
             image_path = args.image
 
