@@ -331,5 +331,118 @@
     "max_shuffle_speed_fps": 3.476521779422866,
     "avg_shuffle_speed_fps": 2.0936921787442198,
     "pixels_per_foot": 20.511487678196993
+  },
+  "DSHDSVB": {
+    "highscore": 0,
+    "lifetime_calories": 0.0,
+    "minutes_played": 0.0,
+    "balance_ability": 0.0,
+    "max_jump_height_ft": 0.0,
+    "avg_jump_height_ft": 0.0,
+    "max_shuffle_speed_fps": 0.0,
+    "avg_shuffle_speed_fps": 0.0,
+    "pixels_per_foot": null
+  },
+  "HUUGR": {
+    "highscore": 0,
+    "lifetime_calories": 0.0,
+    "minutes_played": 0.0,
+    "balance_ability": 0.0,
+    "max_jump_height_ft": 0.0,
+    "avg_jump_height_ft": 0.0,
+    "max_shuffle_speed_fps": 0.0,
+    "avg_shuffle_speed_fps": 0.0,
+    "pixels_per_foot": null
+  },
+  "YGIFI": {
+    "highscore": 0,
+    "lifetime_calories": 0.0,
+    "minutes_played": 0.0,
+    "balance_ability": 0.0,
+    "max_jump_height_ft": 0.0,
+    "avg_jump_height_ft": 0.0,
+    "max_shuffle_speed_fps": 0.0,
+    "avg_shuffle_speed_fps": 0.0,
+    "pixels_per_foot": null
+  },
+  "LIFDSI": {
+    "highscore": 0,
+    "lifetime_calories": 0.0,
+    "minutes_played": 0.0,
+    "balance_ability": 0.0,
+    "max_jump_height_ft": 0.0,
+    "avg_jump_height_ft": 0.0,
+    "max_shuffle_speed_fps": 0.0,
+    "avg_shuffle_speed_fps": 0.0,
+    "pixels_per_foot": null
+  },
+  "OBAMA": {
+    "highscore": 113,
+    "lifetime_calories": 15.948666666666517,
+    "minutes_played": 1.9935833333333146,
+    "balance_ability": 163.42008726638736,
+    "max_jump_height_ft": 0.9301180293643229,
+    "avg_jump_height_ft": 0.9301180293643229,
+    "max_shuffle_speed_fps": 5.1125737073297355,
+    "avg_shuffle_speed_fps": 5.1125737073297355,
+    "pixels_per_foot": 7.765393617235873
+  },
+  "JACK": {
+    "highscore": 52,
+    "lifetime_calories": 10.52413333333293,
+    "minutes_played": 1.3155166666666163,
+    "balance_ability": 1110.4213259779672,
+    "max_jump_height_ft": 1.1263954017457336,
+    "avg_jump_height_ft": 0.7810953407416849,
+    "max_shuffle_speed_fps": 3.8155515662020174,
+    "avg_shuffle_speed_fps": 1.7749526090468963,
+    "pixels_per_foot": 24.583474164348363
+  },
+  "JACKW": {
+    "highscore": 126,
+    "lifetime_calories": 11.066533333332872,
+    "minutes_played": 1.383316666666609,
+    "balance_ability": 789.7126858785053,
+    "max_jump_height_ft": 1.1368364147422794,
+    "avg_jump_height_ft": 0.9022971528642181,
+    "max_shuffle_speed_fps": 10.940466016882564,
+    "avg_shuffle_speed_fps": 6.651578060546866,
+    "pixels_per_foot": 16.374569208173266
+  },
+  "JDFKSL": {
+    "highscore": 113,
+    "lifetime_calories": 8.969733333333014,
+    "minutes_played": 1.1212166666666268,
+    "balance_ability": 146.21020109751086,
+    "max_jump_height_ft": 0.08709478043901253,
+    "avg_jump_height_ft": 0.08709478043901253,
+    "max_shuffle_speed_fps": 4.176401499054048,
+    "avg_shuffle_speed_fps": 4.176401499054048,
+    "pixels_per_foot": 30.618689384288544,
+    "intensity": "MEDIUM"
+  },
+  "PENIS": {
+    "highscore": 13,
+    "lifetime_calories": 7.383866666666481,
+    "minutes_played": 0.9229833333333102,
+    "balance_ability": 952.2536254089914,
+    "max_jump_height_ft": 0.0,
+    "avg_jump_height_ft": 0.0,
+    "max_shuffle_speed_fps": 0.0,
+    "avg_shuffle_speed_fps": 0.0,
+    "pixels_per_foot": null,
+    "intensity": "MEDIUM"
+  },
+  "LKJHGFDSAQWERTYU": {
+    "highscore": 212,
+    "lifetime_calories": 7.504666666666464,
+    "minutes_played": 0.938083333333308,
+    "balance_ability": 856.3209992737212,
+    "max_jump_height_ft": 0.29620470011485206,
+    "avg_jump_height_ft": 0.2949173304667774,
+    "max_shuffle_speed_fps": 10.070611319472153,
+    "avg_shuffle_speed_fps": 5.7161526464689185,
+    "pixels_per_foot": 14.084319099462489,
+    "intensity": "MEDIUM"
   }
 }

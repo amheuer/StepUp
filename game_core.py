@@ -871,11 +871,13 @@ class Game:
 							if existed:
 								self._ensure_user(name)
 								user = self.users.get(self.current_user)
-								if user is not None and "intensity" in user:
-									try:
-										self._apply_intensity(cfg.Intensity[user["intensity"]])
-									except Exception:
-										pass
+								if user is not None:
+									self._reset_user_stats(user)
+									if "intensity" in user:
+										try:
+											self._apply_intensity(cfg.Intensity[user["intensity"]])
+										except Exception:
+											pass
 								self.calories = 0.0
 								self.display_calories = 0.0
 								self.username_input = ""

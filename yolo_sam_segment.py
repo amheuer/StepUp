@@ -15,7 +15,7 @@ from ultralytics import YOLO, SAM
 
 # Webcam selection (like cv_tester)
 USE_USB_WEBCAM = True
-WEBCAM_INDEX = 2
+WEBCAM_INDEX = 4
 
 # Detect screen resolution once at module load
 try:
