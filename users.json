@@ -65,9 +65,15 @@
     "minutes_played": 0.0
   },
   "JRW": {
-    "highscore": 0,
-    "lifetime_calories": 0.0,
-    "minutes_played": 0.0
+    "highscore": 200,
+    "lifetime_calories": 11.120666666666732,
+    "minutes_played": 1.3900833333333416,
+    "pixels_per_foot": 1.131646161381447,
+    "balance_ability": 367.23655092758935,
+    "max_jump_height_ft": 9.024823087000014,
+    "avg_jump_height_ft": 2.7143152707500033,
+    "max_shuffle_speed_fps": 70.89324465886428,
+    "avg_shuffle_speed_fps": 42.399203764907725
   },
   "JLSSDLSKF": {
     "highscore": 200,
@@ -215,5 +221,60 @@
     "lifetime_calories": 20.72760000000145,
     "minutes_played": 2.590950000000181,
     "balance_ability": 610.2598449375641
+  },
+  "SKLJFSDL": {
+    "highscore": 200,
+    "lifetime_calories": 9.228933333333172,
+    "minutes_played": 1.1536166666666465,
+    "balance_ability": 833.6335609857883,
+    "max_jump_height_ft": 6.3849303000000095,
+    "avg_jump_height_ft": 2.7404186625555584,
+    "max_shuffle_speed_fps": 48.331278857157415,
+    "avg_shuffle_speed_fps": 14.065316626281193,
+    "pixels_per_foot": 4.261013316937784
+  },
+  "A": {
+    "highscore": 0,
+    "lifetime_calories": 0.0,
+    "minutes_played": 0.0,
+    "balance_ability": 0.0,
+    "max_jump_height_ft": 0.0,
+    "avg_jump_height_ft": 0.0,
+    "max_shuffle_speed_fps": 0.0,
+    "avg_shuffle_speed_fps": 0.0,
+    "pixels_per_foot": null
+  },
+  "B": {
+    "highscore": 0,
+    "lifetime_calories": 6.640533333333191,
+    "minutes_played": 0.8300666666666489,
+    "balance_ability": 0.0,
+    "max_jump_height_ft": 0.0,
+    "avg_jump_height_ft": 0.0,
+    "max_shuffle_speed_fps": 0.0,
+    "avg_shuffle_speed_fps": 0.0,
+    "pixels_per_foot": 42.91003857363956
+  },
+  "KJHKJ": {
+    "highscore": 200,
+    "lifetime_calories": 18.430800000000456,
+    "minutes_played": 2.303850000000057,
+    "balance_ability": 644.8044358060168,
+    "max_jump_height_ft": 5.524211452000007,
+    "avg_jump_height_ft": 2.502328462636367,
+    "max_shuffle_speed_fps": 0.30274589364723603,
+    "avg_shuffle_speed_fps": 0.20348384244019657,
+    "pixels_per_foot": 188.01471960607856
+  },
+  "FKSFDSF": {
+    "highscore": 100,
+    "lifetime_calories": 18.789066666667107,
+    "minutes_played": 2.3486333333333884,
+    "balance_ability": 1300.9853055955066,
+    "max_jump_height_ft": 2.7070665681260544,
+    "avg_jump_height_ft": 1.6147113693028312,
+    "max_shuffle_speed_fps": 1.0994636702701865,
+    "avg_shuffle_speed_fps": 0.811955330050068,
+    "pixels_per_foot": 44.16510190651603
   }
 }

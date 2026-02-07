@@ -190,14 +190,15 @@ def compute_center(keypoints):
 
 @dataclass
 class CVState:
-    zone: Optional[str]
-    jump_active: bool
-    jump_vector: Optional[Tuple[float, float]]
-    center: Optional[Tuple[float, float]]
-    center_velocity: Optional[Tuple[float, float]]
-    debug_frame: Optional[np.ndarray]
-    timestamp: float
-    has_person: bool
+	zone: Optional[str]
+	jump_active: bool
+	jump_vector: Optional[Tuple[float, float]]
+	center: Optional[Tuple[float, float]]
+	center_velocity: Optional[Tuple[float, float]]
+	bbox_center: Optional[Tuple[float, float]]
+	debug_frame: Optional[np.ndarray]
+	timestamp: float
+	has_person: bool
 
 class CVController:
     def __init__(
@@ -231,15 +232,16 @@ class CVController:
         self._last_jump_vector = None
 
         self._state = CVState(
-            zone=None,
-            jump_active=False,
-            jump_vector=None,
-            center=None,
-            center_velocity=None,
-            debug_frame=None,
-            timestamp=time.time(),
-            has_person=False,
-        )
+			zone=None,
+			jump_active=False,
+			jump_vector=None,
+			center=None,
+			center_velocity=None,
+			bbox_center=None,
+			debug_frame=None,
+			timestamp=time.time(),
+			has_person=False,
+		)
 
         logger.info("Loading detection model: %s", DETECTION_MODEL_PATH)
         try:
@@ -293,28 +295,30 @@ class CVController:
     def get_state(self) -> CVState:
         with self._lock:
             return CVState(
-                zone=self._state.zone,
-                jump_active=self._state.jump_active,
-                jump_vector=self._state.jump_vector,
-                center=self._state.center,
-                center_velocity=self._state.center_velocity,
-                debug_frame=None if self._state.debug_frame is None else self._state.debug_frame.copy(),
-                timestamp=self._state.timestamp,
-                has_person=self._state.has_person,
-            )
+				zone=self._state.zone,
+				jump_active=self._state.jump_active,
+				jump_vector=self._state.jump_vector,
+				center=self._state.center,
+				center_velocity=self._state.center_velocity,
+				bbox_center=self._state.bbox_center,
+				debug_frame=None if self._state.debug_frame is None else self._state.debug_frame.copy(),
+				timestamp=self._state.timestamp,
+				has_person=self._state.has_person,
+			)
 
-    def _update_state(self, zone, jump_active, jump_vector, center, center_velocity, debug_frame, has_person):
+    def _update_state(self, zone, jump_active, jump_vector, center, center_velocity, bbox_center, debug_frame, has_person):
         with self._lock:
             self._state = CVState(
-                zone=zone,
-                jump_active=jump_active,
-                jump_vector=jump_vector,
-                center=center,
-                center_velocity=center_velocity,
-                debug_frame=debug_frame,
-                timestamp=time.time(),
-                has_person=has_person,
-            )
+				zone=zone,
+				jump_active=jump_active,
+				jump_vector=jump_vector,
+				center=center,
+				center_velocity=center_velocity,
+				bbox_center=bbox_center,
+				debug_frame=debug_frame,
+				timestamp=time.time(),
+				has_person=has_person,
+			)
 
     def _loop(self):
         while not self._stop_event.is_set():
@@ -407,7 +411,7 @@ class CVController:
                     self._jump_display_frames -= 1
                 jump_active = self._jump_display_frames > 0
                 jump_vector = self._last_jump_vector if jump_active else None
-                self._update_state(None, jump_active, jump_vector, None, None, frame, False)
+                self._update_state(None, jump_active, jump_vector, None, None, None, frame, False)
                 if self.show_window:
                     cv2.imshow("YOLO11n Person+Pose", frame)
                     cv2.waitKey(1)
@@ -431,10 +435,12 @@ class CVController:
             keypoints_out = []
             center = None
             center_velocity = None
+            bbox_center = None
             for p_i in person_order:
                 box = person_boxes[p_i]
                 conf = float(person_scores[p_i]) if len(person_scores) > p_i else 0.0
                 x1, y1, x2, y2 = [int(round(x)) for x in box]
+                bbox_center = ((x1 + x2) / 2.0, (y1 + y2) / 2.0)
                 crop = crop_with_padding(frame, (x1, y1, x2, y2))
                 keypoints_out = []
 
@@ -529,7 +535,7 @@ class CVController:
                 self._jump_display_frames -= 1
             jump_active = self._jump_display_frames > 0
             jump_vector = self._last_jump_vector if jump_active else None
-            self._update_state(zone, jump_active, jump_vector, center, center_velocity, frame, True)
+            self._update_state(zone, jump_active, jump_vector, center, center_velocity, bbox_center, frame, True)
 
             if self.show_window:
                 cv2.imshow("YOLO11n Person+Pose", frame)
