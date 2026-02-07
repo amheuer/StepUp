@@ -1215,7 +1215,7 @@ class Game:
 					)
 				return surf
 
-			panel_w = int(WINDOW_WIDTH * 0.8)
+			panel_w = int(WINDOW_WIDTH * 0.8) + 20
 			panel_h = int(WINDOW_HEIGHT * 0.68)
 			panel_x = (WINDOW_WIDTH - panel_w) // 2
 			panel_y = (WINDOW_HEIGHT - panel_h) // 2
