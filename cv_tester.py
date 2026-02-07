@@ -23,8 +23,9 @@ import sys
 import time
 import json
 import logging
+import threading
 from dataclasses import asdict, dataclass
-from typing import List, Tuple
+from typing import List, Tuple, Optional
 
 import cv2
 import numpy as np
@@ -53,6 +54,13 @@ POSE_MODEL_PATH = "yolo11n-pose.pt"        # will download if not present via Ul
 SHOW_FPS = True
 PRINT_JSON_LOGS = True     # prints per-frame JSON to stdout
 FOCUS_ONE_PERSON = True    # true = only process the top person detection
+# Zone / control tuning
+ZONE_LEFT_PCT = 0.40
+ZONE_CENTER_PCT = 0.25
+ZONE_ALPHA = 0.20
+JUMP_FRAMES_UP = 4
+JUMP_MIN_DELTA_PX = 4
+JUMP_HOLD_FRAMES = 20
 # -----------------------
 
 # Keypoint indices (COCO-style ordering from user)
@@ -83,8 +91,6 @@ logging.basicConfig(
     handlers=[logging.StreamHandler(sys.stdout)],
 )
 logger = logging.getLogger("yolo11n-pose")
-
-print("hello")
 
 @dataclass
 class DetectionLog:
@@ -144,9 +150,8 @@ def draw_keypoints_and_skeleton(img, keypoints, offset=(0,0)):
 
 def draw_zones_overlay(frame, left_pct=0.30, center_pct=0.40, alpha=0.20):
     h, w = frame.shape[:2]
-    left_w = int(round(w * left_pct))
-    center_w = int(round(w * center_pct))
-    right_start = left_w + center_w
+    left_w, right_start = compute_zone_edges(w, left_pct, center_pct)
+    center_w = right_start - left_w
 
     overlay = frame.copy()
     # left and right zones (green)
@@ -158,12 +163,331 @@ def draw_zones_overlay(frame, left_pct=0.30, center_pct=0.40, alpha=0.20):
     cv2.addWeighted(overlay, alpha, frame, 1 - alpha, 0, frame)
     return left_w, right_start
 
+def compute_zone_edges(width, left_pct, center_pct):
+    left_w = int(round(width * left_pct))
+    center_w = int(round(width * center_pct))
+    right_start = left_w + center_w
+    return left_w, right_start
+
 def classify_zone(x_center, left_edge, right_edge):
     if x_center < left_edge:
         return "LEFT"
     if x_center > right_edge:
         return "RIGHT"
     return "CENTER"
+
+@dataclass
+class CVState:
+    zone: Optional[str]
+    jump_active: bool
+    debug_frame: Optional[np.ndarray]
+    timestamp: float
+    has_person: bool
+
+class CVController:
+    def __init__(
+        self,
+        *,
+        use_usb_webcam: bool = USE_USB_WEBCAM,
+        webcam_index: int = WEBCAM_INDEX,
+        target_fps: int = TARGET_FPS,
+        left_pct: float = ZONE_LEFT_PCT,
+        center_pct: float = ZONE_CENTER_PCT,
+        debug_draw: bool = True,
+        show_window: bool = False,
+    ):
+        self.device = choose_device_prefer_cuda()
+        self.left_pct = left_pct
+        self.center_pct = center_pct
+        self.debug_draw = debug_draw
+        self.show_window = show_window
+        self.target_fps = target_fps
+        self.use_usb_webcam = use_usb_webcam
+        self.webcam_index = webcam_index
+        self._stop_event = threading.Event()
+        self._lock = threading.Lock()
+        self._thread = None
+        self._last_frame_time = 0.0
+
+        self._jump_up_count = 0
+        self._jump_display_frames = 0
+        self._prev_leg_y = None
+
+        self._state = CVState(
+            zone=None,
+            jump_active=False,
+            debug_frame=None,
+            timestamp=time.time(),
+            has_person=False,
+        )
+
+        logger.info("Loading detection model: %s", DETECTION_MODEL_PATH)
+        try:
+            self.det_model = YOLO(DETECTION_MODEL_PATH)
+            try:
+                self.det_model.to(self.device)
+            except Exception:
+                logger.debug("det_model.to(device) not supported by this ultralytics version; will pass device per-inference.")
+        except Exception:
+            logger.exception("Failed to load detection model. Ensure ultralytics can download or model path exists.")
+            raise
+
+        logger.info("Loading pose model: %s", POSE_MODEL_PATH)
+        try:
+            self.pose_model = YOLO(POSE_MODEL_PATH)
+            try:
+                self.pose_model.to(self.device)
+            except Exception:
+                logger.debug("pose_model.to(device) not supported by this ultralytics version; will pass device per-inference.")
+        except Exception:
+            logger.exception("Failed to load pose model. Ensure ultralytics can download or model path exists.")
+            raise
+
+        self.cap = None
+
+    def start(self):
+        if self._thread and self._thread.is_alive():
+            return
+        cam_index = self.webcam_index if self.use_usb_webcam else 0
+        self.cap = cv2.VideoCapture(cam_index, cv2.CAP_DSHOW if sys.platform.startswith("win") else cv2.CAP_ANY)
+        if not self.cap.isOpened():
+            raise RuntimeError(f"Cannot open webcam index {cam_index}.")
+        if FRAME_WIDTH and FRAME_HEIGHT:
+            self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, FRAME_WIDTH)
+            self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, FRAME_HEIGHT)
+        if self.target_fps:
+            self.cap.set(cv2.CAP_PROP_FPS, self.target_fps)
+        self._thread = threading.Thread(target=self._loop, daemon=True)
+        self._thread.start()
+
+    def stop(self):
+        self._stop_event.set()
+        if self._thread and self._thread.is_alive():
+            self._thread.join(timeout=2.0)
+        if self.cap:
+            self.cap.release()
+            self.cap = None
+        if self.show_window:
+            cv2.destroyAllWindows()
+
+    def get_state(self) -> CVState:
+        with self._lock:
+            return CVState(
+                zone=self._state.zone,
+                jump_active=self._state.jump_active,
+                debug_frame=None if self._state.debug_frame is None else self._state.debug_frame.copy(),
+                timestamp=self._state.timestamp,
+                has_person=self._state.has_person,
+            )
+
+    def _update_state(self, zone, jump_active, debug_frame, has_person):
+        with self._lock:
+            self._state = CVState(
+                zone=zone,
+                jump_active=jump_active,
+                debug_frame=debug_frame,
+                timestamp=time.time(),
+                has_person=has_person,
+            )
+
+    def _loop(self):
+        while not self._stop_event.is_set():
+            if not self.cap:
+                time.sleep(0.01)
+                continue
+            ret, frame = self.cap.read()
+            if not ret:
+                time.sleep(0.01)
+                continue
+            now = time.time()
+            if self._last_frame_time and self.target_fps:
+                if (now - self._last_frame_time) < (1.0 / self.target_fps):
+                    continue
+            self._last_frame_time = now
+            frame = cv2.flip(frame, 1)
+
+            h, w = frame.shape[:2]
+            left_edge, right_edge = compute_zone_edges(w, self.left_pct, self.center_pct)
+            if self.debug_draw:
+                draw_zones_overlay(frame, self.left_pct, self.center_pct, ZONE_ALPHA)
+
+            try:
+                det_results = self.det_model.predict(
+                    frame,
+                    conf=CONFIDENCE_THRESH,
+                    iou=IOU_NMS,
+                    max_det=MAX_DETECTIONS,
+                    verbose=False,
+                )
+            except TypeError:
+                det_results = self.det_model(
+                    frame,
+                    conf=CONFIDENCE_THRESH,
+                    iou=IOU_NMS,
+                    max_det=MAX_DETECTIONS,
+                    verbose=False,
+                )
+            except Exception:
+                logger.exception("Detection model inference failed.")
+                self._update_state(None, False, frame, False)
+                continue
+
+            det_res = det_results[0] if isinstance(det_results, (list, tuple)) else det_results
+            boxes_xyxy = []
+            scores = []
+            class_ids = []
+            try:
+                if hasattr(det_res, "boxes"):
+                    b = det_res.boxes
+                    boxes_xyxy = b.xyxy.cpu().numpy() if hasattr(b, "xyxy") else b.xyxy.numpy()
+                    scores = b.conf.cpu().numpy() if hasattr(b, "conf") else b.conf.numpy()
+                    class_ids = b.cls.cpu().numpy().astype(int) if hasattr(b, "cls") else b.cls.numpy().astype(int)
+                else:
+                    boxes_xyxy = np.array(det_res.boxes.xyxy).astype(float)
+                    scores = np.array(det_res.boxes.conf).astype(float)
+                    class_ids = np.array(det_res.boxes.cls).astype(int)
+            except Exception:
+                boxes_xyxy = []
+                scores = []
+                class_ids = []
+
+            person_indices = []
+            try:
+                names = self.det_model.model.names if hasattr(self.det_model, "model") and hasattr(self.det_model.model, "names") else None
+            except Exception:
+                names = None
+
+            for i, cid in enumerate(class_ids if len(class_ids) else []):
+                is_person = False
+                if names is not None:
+                    name = names[int(cid)]
+                    if name.lower() == "person":
+                        is_person = True
+                else:
+                    if int(cid) == 0:
+                        is_person = True
+                if is_person:
+                    person_indices.append(i)
+
+            person_boxes = []
+            person_scores = []
+            for idx in person_indices:
+                person_boxes.append(boxes_xyxy[idx])
+                person_scores.append(scores[idx] if len(scores) > idx else 0.0)
+
+            if len(person_boxes) == 0:
+                if self._jump_display_frames > 0:
+                    self._jump_display_frames -= 1
+                jump_active = self._jump_display_frames > 0
+                self._update_state(None, jump_active, frame, False)
+                if self.show_window:
+                    cv2.imshow("YOLO11n Person+Pose", frame)
+                    cv2.waitKey(1)
+                continue
+
+            person_order = sorted(range(len(person_boxes)), key=lambda i: person_scores[i], reverse=True)
+            if FOCUS_ONE_PERSON:
+                person_order = person_order[:1]
+            else:
+                person_order = person_order[:MAX_DETECTIONS]
+
+            zone = None
+            keypoints_out = []
+            for p_i in person_order:
+                box = person_boxes[p_i]
+                conf = float(person_scores[p_i]) if len(person_scores) > p_i else 0.0
+                x1, y1, x2, y2 = [int(round(x)) for x in box]
+                bbox_center_x = int(round((x1 + x2) / 2))
+                zone = classify_zone(bbox_center_x, left_edge, right_edge)
+                crop = crop_with_padding(frame, (x1, y1, x2, y2))
+                keypoints_out = []
+
+                if crop is not None and crop.size != 0:
+                    try:
+                        pose_results = self.pose_model.predict(crop, conf=0.25, verbose=False)
+                    except TypeError:
+                        pose_results = self.pose_model(crop, conf=0.25, verbose=False)
+                    except Exception:
+                        pose_results = None
+
+                    if pose_results is not None:
+                        pr = pose_results[0] if isinstance(pose_results, (list, tuple)) else pose_results
+                        extracted = False
+                        try:
+                            if hasattr(pr, "keypoints") and pr.keypoints is not None:
+                                kps = pr.keypoints
+                                if hasattr(kps, "xy"):
+                                    kp_arr = kps.xy.cpu().numpy()
+                                elif hasattr(kps, "xyxy"):
+                                    kp_arr = kps.xyxy.cpu().numpy()
+                                elif hasattr(kps, "data"):
+                                    kp_arr = kps.data.cpu().numpy()
+                                else:
+                                    kp_arr = np.array(kps)
+                                if kp_arr.ndim == 3:
+                                    kp_arr = kp_arr[0]
+                                for row in kp_arr:
+                                    if len(row) >= 3:
+                                        xk, yk, kc = float(row[0]), float(row[1]), float(row[2])
+                                    elif len(row) == 2:
+                                        xk, yk, kc = float(row[0]), float(row[1]), 1.0
+                                    else:
+                                        continue
+                                    keypoints_out.append((xk + x1, yk + y1, kc))
+                                extracted = True
+                        except Exception:
+                            extracted = False
+
+                        if not extracted:
+                            try:
+                                if hasattr(pr, "keypoints") and hasattr(pr.keypoints, "numpy"):
+                                    kp_arr = pr.keypoints.numpy()
+                                    if kp_arr.ndim == 3:
+                                        kp_arr = kp_arr[0]
+                                    for row in kp_arr:
+                                        if len(row) >= 3:
+                                            xk, yk, kc = float(row[0]), float(row[1]), float(row[2])
+                                        elif len(row) == 2:
+                                            xk, yk, kc = float(row[0]), float(row[1]), 1.0
+                                        else:
+                                            continue
+                                        keypoints_out.append((xk + x1, yk + y1, kc))
+                                    extracted = True
+                            except Exception:
+                                extracted = False
+
+                if self.debug_draw:
+                    draw_bbox_and_label(frame, (x1, y1, x2, y2), f"person {conf:.2f}")
+                    draw_keypoints_and_skeleton(frame, keypoints_out, offset=(0, 0))
+
+                leg_indices = [11, 12, 13, 14]
+                leg_points = []
+                for idx in leg_indices:
+                    if idx < len(keypoints_out):
+                        xk, yk, kc = keypoints_out[idx]
+                        if kc > 0:
+                            leg_points.append(yk)
+                if leg_points:
+                    curr_leg_y = float(np.mean(leg_points))
+                    if self._prev_leg_y is not None and (self._prev_leg_y - curr_leg_y) >= JUMP_MIN_DELTA_PX:
+                        self._jump_up_count += 1
+                    else:
+                        self._jump_up_count = 0
+                    self._prev_leg_y = curr_leg_y
+                    if self._jump_up_count >= JUMP_FRAMES_UP:
+                        self._jump_display_frames = JUMP_HOLD_FRAMES
+                        self._jump_up_count = 0
+                else:
+                    self._jump_up_count = 0
+
+            if self._jump_display_frames > 0:
+                self._jump_display_frames -= 1
+            jump_active = self._jump_display_frames > 0
+            self._update_state(zone, jump_active, frame, True)
+
+            if self.show_window:
+                cv2.imshow("YOLO11n Person+Pose", frame)
+                cv2.waitKey(1)
 
 def run():
     device = choose_device_prefer_cuda()
@@ -214,9 +538,7 @@ def run():
     jump_up_count = 0
     jump_display_frames = 0
     prev_leg_y = None
-    JUMP_FRAMES_UP = 3
-    JUMP_MIN_DELTA_PX = 3
-    JUMP_HOLD_FRAMES = 20
+    # Jump detection state uses top-level JUMP_* constants
     logger.info("Starting webcam loop. Press 'q' to quit.")
     try:
         while True:
@@ -232,7 +554,12 @@ def run():
 
             frame_idx += 1
             h, w = frame.shape[:2]
-            left_edge, right_edge = draw_zones_overlay(frame, left_pct=0.40, center_pct=0.25, alpha=0.20)
+            left_edge, right_edge = draw_zones_overlay(
+                frame,
+                left_pct=ZONE_LEFT_PCT,
+                center_pct=ZONE_CENTER_PCT,
+                alpha=ZONE_ALPHA,
+            )
 
             # Run detector on the whole frame. Set save=False / verbose=False in predict if needed.
             # We use model.predict to allow passing conf and iou args (if API supports).

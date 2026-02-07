@@ -2,11 +2,14 @@
 
 import sys
 import random
+import math
+import cv2
 from pathlib import Path
 import json
 
 import pygame
 
+from cv_tester import CVController, CVState
 from collisions import check_if_on_platform
 from coins import Coin, collect_coins, cull_coins, spawn_coins_near_platforms
 from config import (
@@ -94,6 +97,12 @@ class Game:
 		self.bar_pattern_size = (0, 0)
 		self.menu_pattern_surface = None
 		self.menu_pattern_size = (0, 0)
+		self.cv = None
+		self.cv_state = CVState(zone=None, jump_active=False, debug_frame=None, timestamp=0.0, has_person=False)
+		self.countdown_active = False
+		self.countdown_remaining = 0.0
+		self.landing_stick_timer = 0.0
+		self.landing_stick_duration = 0.2
 
 		self.reset()
 		self.running = True
@@ -117,6 +126,15 @@ class Game:
 		self.current_user = None
 		self.users = self._load_users()
 		self.user_save_timer = 0.0
+		self._init_cv()
+
+	def _init_cv(self):
+		try:
+			self.cv = CVController(debug_draw=True, show_window=False)
+			self.cv.start()
+		except Exception as exc:
+			self.cv = None
+			print(f"[CV] Failed to initialize CV controller: {exc}")
 
 	def reset(self):
 		"""Reset game state for a new game."""
@@ -133,6 +151,9 @@ class Game:
 		self.paused = False
 		pygame.mixer.music.play(-1)
 		self.skip_sfx_frames = 2
+		self.countdown_active = True
+		self.countdown_remaining = 3.0
+		self.landing_stick_timer = 0.0
 
 	def _update_calories(self):
 		"""Return calories per minute based on intensity."""
@@ -424,8 +445,11 @@ class Game:
 		"""Update game state."""
 		if self.game_over or self.paused or self.in_menu or self.in_health:
 			return
-
-		keys = pygame.key.get_pressed()
+		if self.countdown_active:
+			self.countdown_remaining = max(0.0, self.countdown_remaining - dt)
+			if self.countdown_remaining <= 0.0:
+				self.countdown_active = False
+			return
 
 		# Store previous position for collision detection
 		prev_y = self.player.y
@@ -435,10 +459,18 @@ class Game:
 		if self.skip_sfx_frames > 0:
 			self.skip_sfx_frames -= 1
 
-		# Update entities
-		self.player.update(dt, keys)
-		if play_sfx and self.player.jumped_this_frame:
-			self.sfx["jump.wav"].play()
+		# Update CV state
+		if self.cv:
+			self.cv_state = self.cv.get_state()
+		else:
+			self.cv_state = CVState(zone=None, jump_active=False, debug_frame=None, timestamp=0.0, has_person=False)
+
+		move_dir = 0
+		if self.cv_state.zone == "LEFT":
+			move_dir = -1
+		elif self.cv_state.zone == "RIGHT":
+			move_dir = 1
+		jump_allowed = True
 
 		if self.player.y < prev_y:
 			pixels_up = (prev_y - self.player.y) / 2
@@ -462,11 +494,28 @@ class Game:
 			self.player.vy = 0  # Stop velocity when on platform (gravity won't apply while on platform)
 			self.player.can_jump = True  # Allow player to jump
 			self.player.x += platform_below.vx * dt
+			min_x = platform_below.x + self.player.radius
+			max_x = platform_below.x + platform_below.w - self.player.radius
+			if max_x < min_x:
+				max_x = min_x
+			self.player.x = max(min_x, min(max_x, self.player.x))
 			platform_below.land()  # Start fading this platform
 			if play_sfx and not was_on_platform:
 				self.sfx["tap.wav"].play()
 			if not was_on_platform:
 				self.display_calories = self.calories
+				self.landing_stick_timer = self.landing_stick_duration
+			if self.landing_stick_timer > 0:
+				self.landing_stick_timer = max(0.0, self.landing_stick_timer - dt)
+				move_dir = 0
+				jump_allowed = False
+		else:
+			self.landing_stick_timer = 0.0
+
+		# Update entities
+		self.player.update(dt, move_dir, self.cv_state.jump_active and jump_allowed)
+		if play_sfx and self.player.jumped_this_frame:
+			self.sfx["jump.wav"].play()
 
 		# Handle scrolling
 		if self.player.y < SCROLL_THRESHOLD:
@@ -650,6 +699,7 @@ class Game:
 
 			# Draw UI
 			self.draw_ui()
+			self._draw_countdown()
 
 			scale = min(screen_w / WINDOW_WIDTH, screen_h / WINDOW_HEIGHT)
 			scaled_w = int(WINDOW_WIDTH * scale)
@@ -695,8 +745,109 @@ class Game:
 				cal_x = right_bar_left + 16
 				self.screen.blit(cal_text, (cal_x, 20))
 
+			self._draw_cv_overlay(screen_w, screen_h)
+
 		pygame.display.flip()
 		self._update_cursor()
+
+	def _draw_cv_overlay(self, screen_w, screen_h):
+		"""Draw CV controls and debug feed in bottom-left corner."""
+		if not self.cv_state:
+			return
+
+		controls_w = 180
+		controls_h = 105
+		padding = 24
+		debug_gap = 20
+		debug_target_w = 240
+		x = padding
+		y = screen_h - padding - controls_h
+
+		self._draw_controls_widget(x, y, controls_w, controls_h)
+		debug_h = self._estimate_debug_height(debug_target_w)
+		self._draw_debug_frame(x, y - debug_gap - debug_h, debug_target_w)
+
+	def _draw_controls_widget(self, x, y, w, h):
+		active_color = (*COLOR_BARS_TEXT, 220)
+		inactive_color = (*COLOR_BARS_TEXT, 70)
+		surf = pygame.Surface((w, h), pygame.SRCALPHA)
+
+		center = (w // 2, int(h * 0.68))
+		arrow_size = 27
+		circle_radius = 15
+
+		zone = self.cv_state.zone
+		jump_active = self.cv_state.jump_active
+
+		self._draw_arrow(
+			surf,
+			(center[0], int(h * 0.22)),
+			"up",
+			arrow_size,
+			active_color if jump_active else inactive_color,
+		)
+		self._draw_arrow(surf, (24, center[1]), "left", arrow_size, active_color if zone == "LEFT" else inactive_color)
+		self._draw_arrow(surf, (w - 24, center[1]), "right", arrow_size, active_color if zone == "RIGHT" else inactive_color)
+
+		circle_color = active_color if zone == "CENTER" else inactive_color
+		pygame.draw.circle(surf, circle_color, center, circle_radius, 0)
+
+		self.screen.blit(surf, (x, y))
+
+	def _draw_arrow(self, surf, center, direction, size, color):
+		cx, cy = center
+		if direction == "up":
+			points = [(cx, cy - size), (cx - size, cy + size), (cx + size, cy + size)]
+		elif direction == "left":
+			points = [(cx - size, cy), (cx + size, cy - size), (cx + size, cy + size)]
+		elif direction == "right":
+			points = [(cx + size, cy), (cx - size, cy - size), (cx - size, cy + size)]
+		else:
+			return
+		pygame.draw.polygon(surf, color, points, 0)
+
+	def _draw_debug_frame(self, x, y, target_w):
+		if not self.cv_state or self.cv_state.debug_frame is None:
+			return
+		frame = self.cv_state.debug_frame
+		if frame is None:
+			return
+		h, w = frame.shape[:2]
+		if w == 0 or h == 0:
+			return
+		target_h = max(1, int(h * (target_w / w)))
+		frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+		surf = pygame.surfarray.make_surface(frame_rgb.swapaxes(0, 1))
+		surf = pygame.transform.smoothscale(surf, (target_w, target_h))
+		self.screen.blit(surf, (x, y))
+
+	def _estimate_debug_height(self, target_w):
+		if not self.cv_state or self.cv_state.debug_frame is None:
+			return int(target_w * 0.75)
+		frame = self.cv_state.debug_frame
+		h, w = frame.shape[:2]
+		if w == 0 or h == 0:
+			return int(target_w * 0.75)
+		return max(1, int(h * (target_w / w)))
+
+	def _draw_countdown(self):
+		if not self.countdown_active:
+			return
+		if self.countdown_remaining <= 0:
+			return
+		value = max(1, int(math.ceil(self.countdown_remaining)))
+		text = self.title_font.render(str(value), True, COLOR_BARS_TEXT)
+		scale = 2.5
+		text = pygame.transform.smoothscale(
+			text,
+			(
+				max(1, int(text.get_width() * scale)),
+				max(1, int(text.get_height() * scale)),
+			),
+		)
+		x = (WINDOW_WIDTH - text.get_width()) // 2
+		y = (WINDOW_HEIGHT - text.get_height()) // 2
+		self.game_surface.blit(text, (x, y))
 
 	def _update_cursor(self):
 		"""Update mouse cursor based on hover state."""
@@ -865,5 +1016,7 @@ class Game:
 			self.update(dt)
 			self.draw()
 
+		if self.cv:
+			self.cv.stop()
 		pygame.quit()
 		sys.exit()
