@@ -10,6 +10,7 @@ import math
 import numpy as np
 import time
 from pathlib import Path
+from PIL import Image as PilImage, ImageDraw, ImageFont
 from ultralytics import YOLO, SAM
 
 # Detect screen resolution once at module load
@@ -22,6 +23,46 @@ try:
     _root.destroy()
 except Exception:
     _SCREEN_W, _SCREEN_H = 1920, 1080
+
+# ── Custom font (same as the game) ──────────────────────────────────
+_FONT_PATH = str(
+    Path(__file__).resolve().parent
+    / "assets"
+    / "Extraordinary Pixelvania - Free Asset Pack"
+    / "Font"
+    / "Extraordinary Font.ttf"
+)
+
+
+def _draw_text_pil(img, text, pos, font_size, color=(255, 255, 255)):
+    """Draw *text* onto a BGR numpy image using the game's TTF font via PIL.
+
+    Parameters
+    ----------
+    img : numpy array (BGR, uint8)  – modified **in-place**.
+    text : str
+    pos : (x, y) – top-left corner of the text.
+    font_size : int – pixel height.
+    color : (R, G, B) tuple  (note: RGB, NOT BGR).
+    """
+    pil_img = PilImage.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
+    draw = ImageDraw.Draw(pil_img)
+    try:
+        font = ImageFont.truetype(_FONT_PATH, font_size)
+    except OSError:
+        font = ImageFont.load_default()
+    draw.text(pos, text, font=font, fill=color)
+    img[:] = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
+
+
+def _get_text_size_pil(text, font_size):
+    """Return (width, height) of *text* rendered at *font_size* using the game font."""
+    try:
+        font = ImageFont.truetype(_FONT_PATH, font_size)
+    except OSError:
+        font = ImageFont.load_default()
+    bbox = font.getbbox(text)          # (left, top, right, bottom)
+    return bbox[2] - bbox[0], bbox[3] - bbox[1]
 
 
 def capture_from_webcam(save_path: str = "capture.jpg", countdown: int = 10,
@@ -64,10 +105,11 @@ def capture_from_webcam(save_path: str = "capture.jpg", countdown: int = 10,
 
     # Create a fullscreen window
     window_name = "Webcam - Get Ready!"
-    cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
-    cv2.setWindowProperty(window_name, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
-
     screen_w, screen_h = _SCREEN_W, _SCREEN_H
+    cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+    cv2.resizeWindow(window_name, screen_w, screen_h)
+    cv2.moveWindow(window_name, 0, 0)
+    cv2.setWindowProperty(window_name, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
 
     while True:
         ret, frame = cap.read()
@@ -164,22 +206,19 @@ def capture_from_webcam(save_path: str = "capture.jpg", countdown: int = 10,
                                    + (1 - outline_mask) * blended).astype(np.uint8)
                         display[fy1:fy1 + rh, fx1:fx1 + rw] = blended
 
-        # Draw text on the webcam-sized frame (it gets resized to screen after)
-        cam_h, cam_w = display.shape[:2]
-        font_scale_label = cam_h / 400.0
-        font_scale_countdown = cam_h / 200.0
-        thickness = max(2, int(cam_h / 200))
+        # Resize display to fill the entire screen, then draw text at screen res
+        display = cv2.resize(display, (screen_w, screen_h))
+
+        hud_size = max(3, screen_h // 180)
         if label:
-            cv2.putText(display, label, (20, int(cam_h * 0.07)),
-                        cv2.FONT_HERSHEY_SIMPLEX, font_scale_label, (0, 255, 0), thickness, cv2.LINE_AA)
+            _draw_text_pil(display, label.upper(), (20, int(screen_h * 0.02)),
+                           hud_size, color=(255, 176, 193))
 
         # Draw countdown (show whole seconds)
-        text = str(math.ceil(remaining)) if remaining > 0 else "0"
-        cv2.putText(display, text, (20, int(cam_h * 0.18)),
-                    cv2.FONT_HERSHEY_SIMPLEX, font_scale_countdown, (0, 0, 255), thickness + 1, cv2.LINE_AA)
+        secs = str(math.ceil(remaining)) if remaining > 0 else "0"
+        _draw_text_pil(display, secs, (20, int(screen_h * 0.06)),
+                       hud_size, color=(255, 80, 80))
 
-        # Resize display to fill the entire screen
-        display = cv2.resize(display, (screen_w, screen_h))
         cv2.imshow(window_name, display)
 
         if remaining <= 0:
@@ -209,24 +248,265 @@ POSES = [
 
 
 def capture_all_poses(countdown: int = 5) -> list:
-    """Capture 3 images in sequence: stand, jump, and left poses."""
-    captured = []
-    for i, pose in enumerate(POSES):
+    """Capture 3 images in sequence: stand, jump, and left poses.
+
+    Uses a single fullscreen window and webcam for all poses.
+    """
+    results, window_name, screen_w, screen_h = _capture_poses_single_window(POSES, countdown)
+    _fade_out_window(window_name, screen_w, screen_h, duration=0.4)
+    return results
+
+
+def _capture_poses_single_window(poses, countdown, save_path_override=None):
+    """Capture multiple poses using one persistent fullscreen window.
+
+    Args:
+        poses: List of pose dicts (name, save_path, reference, ref_scale).
+        countdown: Seconds per pose countdown.
+        save_path_override: If a callable, called with pose dict to get save path.
+                            Otherwise uses pose["save_path"].
+
+    Returns:
+        Tuple of (results, window_name, screen_w, screen_h).
+        results is a list of (pose_name, saved_path) tuples.
+        The window is left open so the caller can show status/fade.
+    """
+    cap = cv2.VideoCapture(0)
+    if not cap.isOpened():
+        raise RuntimeError("Could not open webcam.")
+
+    window_name = "Webcam - Get Ready!"
+    screen_w, screen_h = _SCREEN_W, _SCREEN_H
+    cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+    cv2.resizeWindow(window_name, screen_w, screen_h)
+    cv2.moveWindow(window_name, 0, 0)
+    cv2.setWindowProperty(window_name, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
+
+    yolo_detect = YOLO("yolo11n.pt")
+    screen_w, screen_h = _SCREEN_W, _SCREEN_H
+
+    results = []
+
+    # ── Intro screen: two-line instructional blurb ─────────────────
+    intro_duration = 3.0  # seconds
+    canvas = np.zeros((screen_h, screen_w, 3), dtype=np.uint8)
+    canvas[:] = (30, 18, 15)
+
+    line1 = "CREATE YOUR AVATAR"
+    line2 = "COPY THE POSES!"
+    intro_size = max(4, screen_h // 120)
+
+    w1, h1 = _get_text_size_pil(line1, intro_size)
+    w2, h2 = _get_text_size_pil(line2, intro_size)
+    gap = int(screen_h * 0.04)
+    total_h = h1 + gap + h2
+    y1 = (screen_h - total_h) // 2
+    y2 = y1 + h1 + gap
+
+    _draw_text_pil(canvas, line1, ((screen_w - w1) // 2, y1),
+                   intro_size, color=(255, 176, 193))
+    _draw_text_pil(canvas, line2, ((screen_w - w2) // 2, y2),
+                   intro_size, color=(255, 176, 193))
+
+    # Hold the intro, then fade it out into the live camera
+    intro_start = time.time()
+    while time.time() - intro_start < intro_duration:
+        cv2.imshow(window_name, canvas)
+        if cv2.waitKey(30) & 0xFF == ord('q'):
+            cap.release()
+            cv2.destroyAllWindows()
+            raise RuntimeError("Capture cancelled by user.")
+
+    # Brief fade from intro to camera
+    fade_steps = 10
+    for step in range(1, fade_steps + 1):
+        alpha = step / fade_steps
+        ret, frame = cap.read()
+        if ret:
+            frame = cv2.flip(frame, 1)
+            cam_screen = cv2.resize(frame, (screen_w, screen_h))
+            blended = cv2.addWeighted(canvas, 1 - alpha, cam_screen, alpha, 0)
+            cv2.imshow(window_name, blended)
+            cv2.waitKey(50)
+
+    for pose_idx, pose in enumerate(poses):
+        pose_name = pose["name"]
+        ref_scale = pose.get("ref_scale", 1.0)
+
+        if callable(save_path_override):
+            save_path = save_path_override(pose)
+        else:
+            save_path = pose["save_path"]
+
+        # Load reference image for this pose
+        ref_img = None
+        ref_path = pose.get("reference")
+        if ref_path and Path(ref_path).exists():
+            ref_img = cv2.imread(ref_path, cv2.IMREAD_UNCHANGED)
+
+        label = f"Pose: {pose_name}"
         print(f"\n{'=' * 50}")
-        print(f"[{i + 1}/{len(POSES)}] Get ready for: {pose['name']}")
+        print(f"[{pose_idx + 1}/{len(poses)}] Get ready for: {pose_name}")
         print(f"{'=' * 50}")
-        path = capture_from_webcam(
-            save_path=pose["save_path"],
-            countdown=countdown,
-            reference_image=pose["reference"],
-            pose_name=pose["name"],
-            ref_scale=pose.get("ref_scale", 1.0),
-        )
-        captured.append(path)
-        # Brief pause between captures
-        if i < len(POSES) - 1:
-            time.sleep(1)
-    return captured
+
+        start_time = time.time()
+
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                raise RuntimeError("Failed to read from webcam.")
+
+            frame = cv2.flip(frame, 1)
+            elapsed = time.time() - start_time
+            remaining = max(0, countdown - elapsed)
+            display = frame.copy()
+
+            # ── Overlay reference outline onto detected person ──────
+            if ref_img is not None:
+                det = yolo_detect(frame, conf=0.3, classes=[0], verbose=False)
+                boxes = det[0].boxes
+                bbox = None
+                if boxes is not None and len(boxes) > 0:
+                    xyxy = boxes.xyxy.cpu().numpy()
+                    areas = (xyxy[:, 2] - xyxy[:, 0]) * (xyxy[:, 3] - xyxy[:, 1])
+                    idx = int(np.argmax(areas))
+                    bbox = xyxy[idx]
+
+                if bbox is not None:
+                    bx1, by1, bx2, by2 = bbox
+                    bbox_h = by2 - by1
+                    ref_h, ref_w = ref_img.shape[:2]
+
+                    scale = (bbox_h / max(ref_h, 1)) * ref_scale
+                    new_w = int(ref_w * scale)
+                    new_h = int(ref_h * scale)
+
+                    if new_w > 0 and new_h > 0:
+                        ref_resized = cv2.resize(ref_img, (new_w, new_h))
+                        if len(ref_resized.shape) == 2:
+                            ref_resized = cv2.cvtColor(ref_resized, cv2.COLOR_GRAY2BGR)
+
+                        if ref_resized.shape[2] == 4:
+                            vis_gray = cv2.cvtColor(ref_resized[:, :, :3], cv2.COLOR_BGR2GRAY)
+                        else:
+                            vis_gray = cv2.cvtColor(ref_resized, cv2.COLOR_BGR2GRAY)
+                        cols = np.where(vis_gray > 128)
+                        content_cx = int(np.mean(cols[1])) if len(cols[1]) > 0 else new_w // 2
+
+                        cx = int((bx1 + bx2) / 2)
+                        x_off = cx - content_cx
+                        y_off = int(by2) - new_h
+
+                        rx1 = max(0, -x_off)
+                        ry1 = max(0, -y_off)
+                        fx1 = max(0, x_off)
+                        fy1 = max(0, y_off)
+                        rw = min(new_w - rx1, frame.shape[1] - fx1)
+                        rh = min(new_h - ry1, frame.shape[0] - fy1)
+
+                        if rw > 0 and rh > 0:
+                            ref_crop = ref_resized[ry1:ry1 + rh, rx1:rx1 + rw]
+                            roi = display[fy1:fy1 + rh, fx1:fx1 + rw]
+
+                            if ref_crop.shape[2] == 4:
+                                gray = cv2.cvtColor(ref_crop[:, :, :3], cv2.COLOR_BGR2GRAY)
+                                rgb = ref_crop[:, :, :3]
+                            else:
+                                gray = cv2.cvtColor(ref_crop, cv2.COLOR_BGR2GRAY)
+                                rgb = ref_crop
+
+                            white_binary = (gray > 128).astype(np.uint8)
+                            kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
+                            dilated = cv2.dilate(white_binary, kernel, iterations=1)
+                            outline_mask = ((dilated - white_binary) > 0).astype(np.float32)[:, :, np.newaxis]
+
+                            white_mask = white_binary.astype(np.float32)[:, :, np.newaxis]
+                            opacity = 0.35
+                            blended = (white_mask * (opacity * rgb + (1 - opacity) * roi)
+                                       + (1 - white_mask) * roi).astype(np.uint8)
+                            blended = (outline_mask * np.zeros_like(roi)
+                                       + (1 - outline_mask) * blended).astype(np.uint8)
+                            display[fy1:fy1 + rh, fx1:fx1 + rw] = blended
+
+            # ── Resize then draw HUD text at screen resolution ─────
+            display = cv2.resize(display, (screen_w, screen_h))
+
+            hud_size = max(3, screen_h // 180)
+            _draw_text_pil(display, label.upper(), (20, int(screen_h * 0.02)),
+                           hud_size, color=(255, 176, 193))
+
+            secs = str(math.ceil(remaining)) if remaining > 0 else "0"
+            _draw_text_pil(display, secs, (20, int(screen_h * 0.06)),
+                           hud_size, color=(255, 80, 80))
+
+            cv2.imshow(window_name, display)
+
+            if remaining <= 0:
+                cv2.imwrite(save_path, frame)
+                print(f"[INFO] Captured image saved to: {save_path}")
+                break
+
+            if cv2.waitKey(1) & 0xFF == ord('q'):
+                cap.release()
+                cv2.destroyAllWindows()
+                raise RuntimeError("Capture cancelled by user.")
+
+        results.append((pose_name, save_path))
+
+        # Brief pause between poses (stay in the window)
+        if pose_idx < len(poses) - 1:
+            pause_end = time.time() + 1.0
+            while time.time() < pause_end:
+                ret, frame = cap.read()
+                if ret:
+                    frame = cv2.flip(frame, 1)
+                    frame = cv2.resize(frame, (screen_w, screen_h))
+                    cv2.imshow(window_name, frame)
+                cv2.waitKey(30)
+
+    cap.release()
+    # Don't destroy the window yet — caller may want to show a processing screen
+    return results, window_name, screen_w, screen_h
+
+
+def _show_status_on_window(window_name, screen_w, screen_h, message, sub_message=""):
+    """Display a status message on the fullscreen CV window."""
+    canvas = np.zeros((screen_h, screen_w, 3), dtype=np.uint8)
+    canvas[:] = (30, 18, 15)  # dark background matching game
+
+    # Main message — use game font via PIL (uppercase — only working glyphs)
+    main_size = max(4, screen_h // 120)
+    msg_upper = message.upper()
+    tw, th = _get_text_size_pil(msg_upper, main_size)
+    x = (screen_w - tw) // 2
+    y = (screen_h - th) // 2
+    _draw_text_pil(canvas, msg_upper, (x, y), main_size, color=(255, 176, 193))
+
+    # Sub-message (smaller)
+    if sub_message:
+        sub_size = max(3, main_size * 2 // 3)
+        sub_upper = sub_message.upper()
+        sw, sh = _get_text_size_pil(sub_upper, sub_size)
+        _draw_text_pil(canvas, sub_upper,
+                       ((screen_w - sw) // 2, y + th + 20),
+                       sub_size, color=(200, 200, 200))
+
+    cv2.imshow(window_name, canvas)
+    cv2.waitKey(1)
+
+
+def _fade_out_window(window_name, screen_w, screen_h, duration=0.5, destroy=True):
+    """Fade the window to black, optionally destroying it afterwards."""
+    canvas = np.zeros((screen_h, screen_w, 3), dtype=np.uint8)
+    canvas[:] = (30, 18, 15)
+    steps = 15
+    for i in range(steps + 1):
+        alpha = 1.0 - (i / steps)
+        faded = (canvas * alpha).astype(np.uint8)
+        cv2.imshow(window_name, faded)
+        cv2.waitKey(int(duration / steps * 1000))
+    if destroy:
+        cv2.destroyAllWindows()
 
 
 def run_yolo_sam_pipeline(
@@ -420,27 +700,23 @@ def capture_and_process_for_user(
     tmp_dir = out_dir / "_tmp"
     tmp_dir.mkdir(exist_ok=True)
 
-    # Capture all 3 poses from the webcam
-    captured = []
-    for i, pose in enumerate(POSES):
-        print(f"\n{'=' * 50}")
-        print(f"[{i + 1}/{len(POSES)}] Get ready for: {pose['name']}")
-        print(f"{'=' * 50}")
-        save_path = str(tmp_dir / f"capture_{pose['name'].lower()}.png")
-        path = capture_from_webcam(
-            save_path=save_path,
-            countdown=countdown,
-            reference_image=pose["reference"],
-            pose_name=pose["name"],
-            ref_scale=pose.get("ref_scale", 1.0),
-        )
-        captured.append((pose["name"], path))
-        if i < len(POSES) - 1:
-            time.sleep(1)
+    # Capture all 3 poses in a single fullscreen window
+    captured, window_name, screen_w, screen_h = _capture_poses_single_window(
+        POSES,
+        countdown,
+        save_path_override=lambda pose: str(tmp_dir / f"capture_{pose['name'].lower()}.png"),
+    )
+
+    # Show processing status on the same fullscreen window
+    _show_status_on_window(window_name, screen_w, screen_h,
+                           "PROCESSING...", "Creating your character")
 
     # Process each captured image through YOLO+SAM
     success = True
-    for pose_name, img_path in captured:
+    for i, (pose_name, img_path) in enumerate(captured):
+        _show_status_on_window(window_name, screen_w, screen_h,
+                               "PROCESSING...",
+                               f"{pose_name}")
         print(f"\n[INFO] Processing {pose_name} pose...")
         result = run_yolo_sam_pipeline(
             image_path=img_path,
@@ -471,9 +747,20 @@ def capture_and_process_for_user(
     shutil.rmtree(str(tmp_dir), ignore_errors=True)
 
     if success:
+        _show_status_on_window(window_name, screen_w, screen_h,
+                               "DONE!", "Loading game...")
+        time.sleep(0.8)
         print(f"\n[INFO] All sprites saved to {out_dir}")
     else:
+        _show_status_on_window(window_name, screen_w, screen_h,
+                               "DONE", "Some poses failed — using defaults")
+        time.sleep(1.0)
         print(f"\n[WARN] Some sprites could not be created.")
+
+    # Smooth fade to black — keep the window open so the caller can
+    # restore pygame behind it before destroying, avoiding a desktop flash.
+    _fade_out_window(window_name, screen_w, screen_h, duration=0.4, destroy=False)
+
     return success
 
 
@@ -506,7 +793,7 @@ if __name__ == "__main__":
     if args.capture_poses:
         # Capture all 3 poses then process each
         captured = capture_all_poses(countdown=10)
-        for img_path in captured:
+        for _name, img_path in captured:
             run_yolo_sam_pipeline(
                 image_path=img_path,
                 yolo_model=args.yolo_model,

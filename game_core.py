@@ -248,8 +248,13 @@ class Game:
 			print(f"[WARN] Photo capture failed: {exc}")
 			success = False
 
-		# Restore the pygame window
+		# Restore the pygame window *behind* the still-open black CV window
 		self.screen = pygame.display.set_mode((0, 0), pygame.FULLSCREEN)
+		pygame.display.flip()          # make sure the surface is
+		pygame.event.pump()            # presented before we remove the cover
+
+		# Now destroy the CV overlay so the transition is seamless
+		cv2.destroyAllWindows()
 
 		# Restart the CV controller
 		self._init_cv()
