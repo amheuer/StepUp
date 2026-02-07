@@ -10,6 +10,7 @@ from collisions import check_if_on_platform
 from coins import Coin, collect_coins, cull_coins, spawn_coins_near_platforms
 from config import (
 	COLOR_BARS,
+	COLOR_BARS_PATTERN,
 	COLOR_BARS_TEXT,
 	COLOR_GAME_OVER,
 	COLOR_TEXT,
@@ -20,7 +21,10 @@ from config import (
 	WINDOW_TITLE,
 	WINDOW_WIDTH,
 	COIN_RADIUS,
+	COIN_VALUE,
 	INTENSITY,
+	PLAYER_RADIUS,
+	PLAYER_HEIGHT_METERS,
 )
 from entities import Player, Platform
 from platforms import create_initial_platforms, generate_new_platforms
@@ -66,20 +70,28 @@ class Game:
 		self.game_surface = pygame.Surface((WINDOW_WIDTH, WINDOW_HEIGHT))
 		self.high_score = 0
 		self.next_high_score_sfx = 1000
+		self.music_volume = 0.7
+		self.sfx_volume = 0.7
 		tileset = pygame.image.load(TILESET_PATH).convert_alpha()
 		Platform.load_tileset(tileset)
 		self._load_coin_frames()
 		self.sfx = self._load_sfx()
 		pygame.mixer.music.load(SOUNDTRACK_PATH)
+		pygame.mixer.music.set_volume(self.music_volume)
 		pygame.mixer.music.play(-1)
 		self.skip_sfx_frames = 0
 		self._load_backgrounds()
 		self.particle_surface_far = self._build_particle_layer(50)
 		self.particle_surface_near = self._build_particle_layer(90)
+		self.bar_pattern_surface = None
+		self.bar_pattern_size = (0, 0)
 
 		self.reset()
 		self.running = True
 		self.game_over = False
+		self.paused = False
+		self.pause_index = 0
+		self.pause_options = ["RESUME", "MUSIC", "SFX", "RESTART", "QUIT"]
 
 	def reset(self):
 		"""Reset game state for a new game."""
@@ -87,7 +99,7 @@ class Game:
 		self.platforms = create_initial_platforms()
 		self.coins = spawn_coins_near_platforms(self.platforms)
 		self.score = 0
-		self.height_jumped = 0
+		self.height_jumped = 0.0
 		self.coins_collected = 0
 		self.calories = 0.0
 		self.display_calories = 0.0
@@ -115,6 +127,8 @@ class Game:
 			sound = pygame.mixer.Sound(path)
 			if name == "coin.wav":
 				sound.set_volume(0.35)
+			else:
+				sound.set_volume(self.sfx_volume)
 			sfx[name] = sound
 		return sfx
 
@@ -161,6 +175,18 @@ class Game:
 		self.game_surface.blit(surface, (0, -offset))
 		self.game_surface.blit(surface, (0, -offset + height))
 
+	def _build_bar_pattern(self, width, height):
+		"""Create a subtle square pattern for the side bars."""
+		surf = pygame.Surface((width, height))
+		surf.fill(COLOR_BARS)
+		rng = random.Random(1337)
+		tile = 16
+		for y in range(0, height, tile):
+			for x in range(0, width, tile):
+				if rng.random() < 0.35:
+					pygame.draw.rect(surf, COLOR_BARS_PATTERN, (x, y, tile, tile))
+		return surf
+
 	def handle_events(self):
 		"""Process input events."""
 		for event in pygame.event.get():
@@ -168,14 +194,52 @@ class Game:
 				self.running = False
 			elif event.type == pygame.KEYDOWN:
 				if event.key == pygame.K_ESCAPE:
-					self.running = False
+					if self.game_over:
+						self.running = False
+					else:
+						self.paused = not self.paused
 				elif self.game_over and event.key == pygame.K_r:
 					self.reset()
 					self.game_over = False
+				elif self.paused:
+					if event.key in (pygame.K_UP, pygame.K_w):
+						self.pause_index = (self.pause_index - 1) % len(self.pause_options)
+					elif event.key in (pygame.K_DOWN, pygame.K_s):
+						self.pause_index = (self.pause_index + 1) % len(self.pause_options)
+					elif event.key in (pygame.K_LEFT, pygame.K_a):
+						choice = self.pause_options[self.pause_index]
+						if choice == "MUSIC":
+							self.music_volume = max(0.0, self.music_volume - 0.1)
+							pygame.mixer.music.set_volume(self.music_volume)
+						elif choice == "SFX":
+							self.sfx_volume = max(0.0, self.sfx_volume - 0.1)
+							for s in self.sfx.values():
+								s.set_volume(self.sfx_volume)
+							self.sfx["coin.wav"].set_volume(min(0.35, self.sfx_volume))
+					elif event.key in (pygame.K_RIGHT, pygame.K_d):
+						choice = self.pause_options[self.pause_index]
+						if choice == "MUSIC":
+							self.music_volume = min(1.0, self.music_volume + 0.1)
+							pygame.mixer.music.set_volume(self.music_volume)
+						elif choice == "SFX":
+							self.sfx_volume = min(1.0, self.sfx_volume + 0.1)
+							for s in self.sfx.values():
+								s.set_volume(self.sfx_volume)
+							self.sfx["coin.wav"].set_volume(min(0.35, self.sfx_volume))
+					elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
+						choice = self.pause_options[self.pause_index]
+						if choice == "RESUME":
+							self.paused = False
+						elif choice == "RESTART":
+							self.reset()
+							self.game_over = False
+							self.paused = False
+						elif choice == "QUIT":
+							self.running = False
 
 	def update(self, dt):
 		"""Update game state."""
-		if self.game_over:
+		if self.game_over or self.paused:
 			return
 
 		keys = pygame.key.get_pressed()
@@ -192,6 +256,11 @@ class Game:
 		self.player.update(dt, keys)
 		if play_sfx and self.player.jumped_this_frame:
 			self.sfx["jump.wav"].play()
+
+		if self.player.y < prev_y:
+			pixels_up = (prev_y - self.player.y) / 2
+			meters_per_pixel = PLAYER_HEIGHT_METERS / (PLAYER_RADIUS * 2)
+			self.height_jumped += pixels_up * meters_per_pixel
 		for platform in self.platforms:
 			platform.update(dt)
 			if play_sfx and platform.just_broke:
@@ -224,11 +293,6 @@ class Game:
 				platform.y += dy
 			for coin in self.coins:
 				coin.y += dy
-			self.score += int(dy)
-			if self.score > self.height_jumped:
-				self.height_jumped = self.score
-			if self.score > self.high_score:
-				self.high_score = self.score
 
 		# Remove off-screen or faded platforms
 		self.platforms = [
@@ -243,10 +307,10 @@ class Game:
 
 		# Collect coins
 		coin_score, coin_count = collect_coins(self.player, self.coins)
-		self.score += coin_score
 		self.coins_collected += coin_count
 		if play_sfx and coin_count > 0:
 			self.sfx["coin.wav"].play()
+		self.score = int(self.height_jumped * 2) + self.coins_collected * COIN_VALUE
 		if self.score > self.high_score:
 			self.high_score = self.score
 		if play_sfx and self.high_score >= self.next_high_score_sfx:
@@ -273,8 +337,8 @@ class Game:
 		base = pygame.transform.scale(self.bg_base, (WINDOW_WIDTH, WINDOW_HEIGHT))
 		self.game_surface.blit(base, (0, 0))
 
-		self._blit_vertical_tiled(self.particle_surface_far, int(-self.score * 0.03))
-		self._blit_vertical_tiled(self.particle_surface_near, int(-self.score * 0.06))
+		self._blit_vertical_tiled(self.particle_surface_far, int(-self.height_jumped * 0.03))
+		self._blit_vertical_tiled(self.particle_surface_near, int(-self.height_jumped * 0.06))
 
 		top_w = WINDOW_WIDTH
 		scale = top_w / self.bg_bottom.get_width()
@@ -308,6 +372,64 @@ class Game:
 			x = box_x + box_padding
 			y = box_y + box_padding
 			self.game_surface.blit(game_over_text, (x, y))
+		elif self.paused:
+			title = self.font.render("SETTINGS", True, COLOR_GAME_OVER)
+			title = pygame.transform.smoothscale(
+				title,
+				(
+					max(1, title.get_width() // 2),
+					max(1, title.get_height() // 2),
+				),
+			)
+			lines = []
+			for i in range(len(self.pause_options)):
+				opt = self.pause_options[i]
+				if opt == "MUSIC":
+					lines.append(f"MUSIC: {int(self.music_volume * 100)}%")
+				elif opt == "SFX":
+					lines.append(f"SFX: {int(self.sfx_volume * 100)}%")
+				else:
+					lines.append(opt)
+			rendered = []
+			max_w = title.get_width()
+			for i, line in enumerate(lines):
+				prefix = "> " if i == self.pause_index else "  "
+				text = self.font.render(prefix + line, True, COLOR_GAME_OVER)
+				text = pygame.transform.smoothscale(
+					text,
+					(
+						max(1, text.get_width() // 2),
+						max(1, text.get_height() // 2),
+					),
+				)
+				rendered.append(text)
+				# Ensure width accounts for selector prefix even when not selected.
+				test = self.font.render("> " + line, True, COLOR_GAME_OVER)
+				test = pygame.transform.smoothscale(
+					test,
+					(
+						max(1, test.get_width() // 2),
+						max(1, test.get_height() // 2),
+					),
+				)
+				if test.get_width() > max_w:
+					max_w = test.get_width()
+			total_h = title.get_height() + sum(t.get_height() for t in rendered) + 10 * len(rendered)
+			box_padding = 12
+			box_w = max_w + box_padding * 2
+			box_h = total_h + box_padding * 2
+			box_x = (WINDOW_WIDTH - box_w) // 2
+			box_y = (WINDOW_HEIGHT - box_h) // 2 - 20
+			box_rect = pygame.Rect(box_x, box_y, box_w, box_h)
+			pygame.draw.rect(self.game_surface, COLOR_BARS, box_rect)
+			pygame.draw.rect(self.game_surface, (0, 0, 0), box_rect, 2)
+			x = box_x + box_padding
+			y = box_y + box_padding
+			self.game_surface.blit(title, (x, y))
+			y += title.get_height() + 10
+			for t in rendered:
+				self.game_surface.blit(t, (x, y))
+				y += t.get_height() + 10
 
 	def draw(self):
 		"""Render the game state."""
@@ -334,6 +456,12 @@ class Game:
 		scaled_surface = pygame.transform.smoothscale(self.game_surface, (scaled_w, scaled_h))
 		self.screen.blit(scaled_surface, (offset_x, offset_y))
 		if offset_x > 0:
+			bar_w = offset_x
+			if self.bar_pattern_size != (bar_w, screen_h):
+				self.bar_pattern_surface = self._build_bar_pattern(bar_w, screen_h)
+				self.bar_pattern_size = (bar_w, screen_h)
+			self.screen.blit(self.bar_pattern_surface, (0, 0))
+			self.screen.blit(self.bar_pattern_surface, (offset_x + scaled_w, 0))
 			left_border = pygame.Rect(offset_x - 2, 0, 2, screen_h)
 			right_border = pygame.Rect(offset_x + scaled_w, 0, 2, screen_h)
 			pygame.draw.rect(self.screen, (0, 0, 0), left_border)
@@ -343,7 +471,7 @@ class Game:
 			text_lines = [
 				f"HIGHSCORE: {self.high_score}",
 				f"SCORE: {self.score}",
-				f"HEIGHT: {self.height_jumped}",
+				f"HEIGHT: {self.height_jumped:.1f}M",
 				f"COINS: {self.coins_collected}",
 			]
 			tx = 16
@@ -354,7 +482,7 @@ class Game:
 				ty += text_surf.get_height() + 10
 
 			cal_text = self.ui_font.render(
-				f"CALORIES: {self.display_calories:.1f}", True, COLOR_BARS_TEXT
+				f"CALORIES: {self.display_calories:.2f}", True, COLOR_BARS_TEXT
 			)
 			right_bar_left = offset_x + scaled_w
 			cal_x = right_bar_left + 16
