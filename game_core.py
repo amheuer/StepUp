@@ -32,6 +32,7 @@ from config import (
 )
 from entities import Player, Platform
 from platforms import create_initial_platforms, generate_new_platforms
+from yolo_sam_segment import user_has_photos, capture_and_process_for_user
 
 BG_DIR = (
 	Path(__file__).resolve().parent
@@ -183,6 +184,60 @@ class Game:
 			}
 		self.current_user = key
 
+	def _user_sprite_dir(self, username=None):
+		"""Return the per-user sprite directory path."""
+		name = username or self.current_user
+		if not name:
+			return None
+		return PLAYER_DIR / name.strip().upper()
+
+	def _ensure_user_photos(self):
+		"""If the current user has no photos, run the capture pipeline.
+
+		Minimises pygame while the webcam / CV windows are active,
+		then restores and reloads the sprites.  Returns True if sprites
+		are ready (either already existed or were just created).
+		"""
+		if not self.current_user:
+			return True  # no user signed in – use default sprites
+
+		sprite_dir = self._user_sprite_dir()
+		if user_has_photos(str(sprite_dir)):
+			# Already have photos – just make sure they're loaded
+			self._load_player_sprites(sprite_dir)
+			return True
+
+		# Stop the CV controller so its webcam is released for capture
+		if self.cv:
+			self.cv.stop()
+			self.cv = None
+
+		# Minimise pygame so the OpenCV windows are visible
+		pygame.display.iconify()
+
+		try:
+			success = capture_and_process_for_user(
+				player_dir=str(sprite_dir),
+				countdown=10,
+			)
+		except Exception as exc:
+			print(f"[WARN] Photo capture failed: {exc}")
+			success = False
+
+		# Restore the pygame window
+		self.screen = pygame.display.set_mode((0, 0), pygame.FULLSCREEN)
+
+		# Restart the CV controller
+		self._init_cv()
+
+		if success and user_has_photos(str(sprite_dir)):
+			self._load_player_sprites(sprite_dir)
+			return True
+		else:
+			print("[INFO] Using default sprites.")
+			self._load_player_sprites()
+			return False
+
 	def _load_sfx(self):
 		"""Load sound effects by filename."""
 		names = [
@@ -215,11 +270,12 @@ class Game:
 			frames.append(frame)
 		Coin.load_frames(frames, frame_time_ms=80)
 
-	def _load_player_sprites(self):
-		"""Load player sprites."""
-		stand = pygame.image.load(PLAYER_DIR / "stand_still.png").convert_alpha()
-		left = pygame.image.load(PLAYER_DIR / "move_left.png").convert_alpha()
-		jump = pygame.image.load(PLAYER_DIR / "jump.png").convert_alpha()
+	def _load_player_sprites(self, sprite_dir=None):
+		"""Load player sprites from the given directory, or the default."""
+		src = Path(sprite_dir) if sprite_dir else PLAYER_DIR
+		stand = pygame.image.load(src / "stand_still.png").convert_alpha()
+		left = pygame.image.load(src / "move_left.png").convert_alpha()
+		jump = pygame.image.load(src / "jump.png").convert_alpha()
 
 		target_w = PLAYER_RADIUS * 2
 		def scale_by_width(img):
@@ -304,6 +360,13 @@ class Game:
 					pygame.draw.rect(surf, COLOR_BARS_PATTERN, (x, y, tile, tile))
 		return surf
 
+	def _start_game(self):
+		"""Handle the PLAY action: capture photos if needed, then start."""
+		self._ensure_user_photos()
+		self.reset()
+		self.in_menu = False
+		self.in_health = False
+
 	def handle_events(self):
 		"""Process input events."""
 		for event in pygame.event.get():
@@ -316,9 +379,7 @@ class Game:
 					for key, rect in self.menu_option_rects.items():
 						if rect.collidepoint(pos):
 							if key == "PLAY":
-								self.reset()
-								self.in_menu = False
-								self.in_health = False
+								self._start_game()
 							elif key.startswith("HEALTH"):
 								self.in_menu = False
 								self.in_health = True
@@ -380,9 +441,7 @@ class Game:
 					elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
 						choice = self.menu_options[self.menu_index]
 						if choice == "PLAY":
-							self.reset()
-							self.in_menu = False
-							self.in_health = False
+							self._start_game()
 						elif choice.startswith("HEALTH"):
 							self.in_menu = False
 							self.in_health = True

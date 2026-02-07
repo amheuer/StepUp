@@ -18,5 +18,20 @@
     "highscore": 0,
     "lifetime_calories": 0.0,
     "minutes_played": 0.0
+  },
+  "JOHN": {
+    "highscore": 0,
+    "lifetime_calories": 0.0,
+    "minutes_played": 0.0
+  },
+  "STEVE": {
+    "highscore": 0,
+    "lifetime_calories": 0.6675999999999966,
+    "minutes_played": 0.08344999999999958
+  },
+  "DAVE": {
+    "highscore": 0,
+    "lifetime_calories": 0.6686666666666632,
+    "minutes_played": 0.0835833333333329
   }
 }

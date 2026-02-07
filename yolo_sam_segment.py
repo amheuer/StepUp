@@ -130,10 +130,11 @@ def capture_from_webcam(save_path: str = "capture.jpg", countdown: int = 10,
 
 
 # Pose sequence for the 3-capture mode
+_OUTLINE_DIR = Path(__file__).resolve().parent / "assets" / "outline_images"
 POSES = [
-    {"name": "Stand",  "save_path": "capture_stand.png", "reference": "output/stand_mask.png", "ref_scale": 1.0},
-    {"name": "Jump",   "save_path": "capture_jump.png",  "reference": "output/jump_mask.png",  "ref_scale": 1.0},
-    {"name": "Left",   "save_path": "capture_left.png",  "reference": "output/left_mask.png",  "ref_scale": 0.75},
+    {"name": "Stand",  "save_path": "capture_stand.png", "reference": str(_OUTLINE_DIR / "stand_mask.png"), "ref_scale": 1.0},
+    {"name": "Jump",   "save_path": "capture_jump.png",  "reference": str(_OUTLINE_DIR / "jump_mask.png"),  "ref_scale": 1.0},
+    {"name": "Left",   "save_path": "capture_left.png",  "reference": str(_OUTLINE_DIR / "left_mask.png"),  "ref_scale": 1.0},
 ]
 
 
@@ -298,6 +299,112 @@ def run_yolo_sam_pipeline(
     else:
         print("[WARN] SAM produced no masks.")
         return None
+
+
+# ── Mapping from pose name to the sprite filename the game expects ──
+_POSE_TO_SPRITE = {
+    "Stand": "stand_still.png",
+    "Jump":  "jump.png",
+    "Left":  "move_left.png",
+}
+
+
+def user_has_photos(player_dir: str) -> bool:
+    """Return True if *player_dir* already contains all 3 required sprite files."""
+    d = Path(player_dir)
+    return all((d / fname).exists() for fname in _POSE_TO_SPRITE.values())
+
+
+def capture_and_process_for_user(
+    player_dir: str,
+    countdown: int = 10,
+    yolo_model: str = "yolo11n.pt",
+    sam_model: str = "sam2_b.pt",
+    conf_threshold: float = 0.25,
+    grid_size: int = 40,
+) -> bool:
+    """
+    Run the full capture → segment → pixelate pipeline for a player.
+
+    Captures 3 poses via webcam, runs YOLO+SAM on each, and saves the
+    resulting pixelated transparent PNGs into *player_dir* with the
+    filenames the game expects (stand_still.png, jump.png, move_left.png).
+
+    Args:
+        player_dir:     Directory to save the final sprites into.
+        countdown:      Seconds per pose countdown.
+        yolo_model:     YOLO model weights filename.
+        sam_model:      SAM model weights filename.
+        conf_threshold: YOLO confidence threshold.
+        grid_size:      Pixelation grid size (lower = chunkier pixels).
+
+    Returns:
+        True if all 3 sprites were created successfully, False otherwise.
+    """
+    import shutil
+
+    out_dir = Path(player_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    # Use a temporary working directory for intermediate files
+    tmp_dir = out_dir / "_tmp"
+    tmp_dir.mkdir(exist_ok=True)
+
+    # Capture all 3 poses from the webcam
+    captured = []
+    for i, pose in enumerate(POSES):
+        print(f"\n{'=' * 50}")
+        print(f"[{i + 1}/{len(POSES)}] Get ready for: {pose['name']}")
+        print(f"{'=' * 50}")
+        save_path = str(tmp_dir / f"capture_{pose['name'].lower()}.png")
+        path = capture_from_webcam(
+            save_path=save_path,
+            countdown=countdown,
+            reference_image=pose["reference"],
+            pose_name=pose["name"],
+            ref_scale=pose.get("ref_scale", 1.0),
+        )
+        captured.append((pose["name"], path))
+        if i < len(POSES) - 1:
+            time.sleep(1)
+
+    # Process each captured image through YOLO+SAM
+    success = True
+    for pose_name, img_path in captured:
+        print(f"\n[INFO] Processing {pose_name} pose...")
+        result = run_yolo_sam_pipeline(
+            image_path=img_path,
+            yolo_model=yolo_model,
+            sam_model=sam_model,
+            conf_threshold=conf_threshold,
+            output_dir=str(tmp_dir),
+            grid_size=grid_size,
+        )
+        if result is None:
+            print(f"[WARN] Pipeline failed for {pose_name} pose.")
+            success = False
+            continue
+
+        # The pipeline saves "<stem>_pixelated.png" in tmp_dir
+        stem = Path(img_path).stem
+        pixelated_file = tmp_dir / f"{stem}_pixelated.png"
+        sprite_name = _POSE_TO_SPRITE.get(pose_name)
+        if pixelated_file.exists() and sprite_name:
+            dest = out_dir / sprite_name
+            shutil.copy2(str(pixelated_file), str(dest))
+            print(f"[INFO] Saved sprite: {dest}")
+        else:
+            print(f"[WARN] Expected pixelated file not found: {pixelated_file}")
+            success = False
+
+    # Clean up temporary files
+    shutil.rmtree(str(tmp_dir), ignore_errors=True)
+
+    if success:
+        print(f"\n[INFO] All sprites saved to {out_dir}")
+    else:
+        print(f"\n[WARN] Some sprites could not be created.")
+    return success
 
 
 # ── CLI entry point ─────────────────────────────────────────────────
