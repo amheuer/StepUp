@@ -155,6 +155,8 @@ class Platform:
 		self.landed_time = None  # When player landed on this platform
 		self.is_active = True  # Platform is still visible/active
 		self.crack_seed = random.randint(0, 1_000_000)
+		self.crack_lines_max = 0
+		self.crack_alpha_max = 0
 
 	@property
 	def rect(self):
@@ -213,43 +215,61 @@ class Platform:
 			crack_lines = 4
 		if crack_progress > 0.7:
 			crack_lines = 6
+		self.crack_lines_max = max(self.crack_lines_max, crack_lines)
+		self.crack_alpha_max = max(self.crack_alpha_max, crack_alpha)
 
 		if Platform.tileset_loaded:
 			left, mid, right = Platform._get_scaled_tiles(self.kind, self.h)
-			left = left.copy()
-			mid = mid.copy()
-			right = right.copy()
-			left.set_alpha(alpha)
-			mid.set_alpha(alpha)
-			right.set_alpha(alpha)
 
 			tile_w = left.get_width()
 			draw_x = int(self.x)
 			draw_y = int(self.y)
+			right_x = self.w - tile_w
+
+			# Build a mask surface from full-alpha tiles to constrain cracks.
+			mask_surf = pygame.Surface((self.w, self.h), pygame.SRCALPHA)
+			x = 0
+			if self.w <= tile_w * 2:
+				mask_surf.blit(left, (x, 0))
+				mask_surf.blit(right, (right_x, 0))
+			else:
+				mask_surf.blit(left, (x, 0))
+				x += tile_w
+				while x <= right_x - tile_w:
+					mask_surf.blit(mid, (x, 0))
+					x += tile_w
+				mask_surf.blit(right, (right_x, 0))
+
+			# Build the visible platform surface with fade alpha.
+			left_d = left.copy()
+			mid_d = mid.copy()
+			right_d = right.copy()
+			left_d.set_alpha(alpha)
+			mid_d.set_alpha(alpha)
+			right_d.set_alpha(alpha)
 
 			platform_surf = pygame.Surface((self.w, self.h), pygame.SRCALPHA)
 			x = 0
-			right_x = self.w - tile_w
 			if self.w <= tile_w * 2:
-				platform_surf.blit(left, (x, 0))
-				platform_surf.blit(right, (right_x, 0))
+				platform_surf.blit(left_d, (x, 0))
+				platform_surf.blit(right_d, (right_x, 0))
 			else:
-				platform_surf.blit(left, (x, 0))
+				platform_surf.blit(left_d, (x, 0))
 				x += tile_w
 				while x <= right_x - tile_w:
-					platform_surf.blit(mid, (x, 0))
+					platform_surf.blit(mid_d, (x, 0))
 					x += tile_w
-				platform_surf.blit(right, (right_x, 0))
+				platform_surf.blit(right_d, (right_x, 0))
 
 			surface.blit(platform_surf, (draw_x, draw_y))
-			if crack_lines:
-				cracks = self._make_cracks(crack_lines, crack_alpha)
-				mask = pygame.mask.from_surface(platform_surf)
-				mask_surf = mask.to_surface(
+			if self.crack_lines_max:
+				cracks = self._make_cracks(self.crack_lines_max, crack_alpha)
+				mask = pygame.mask.from_surface(mask_surf)
+				mask_surface = mask.to_surface(
 					setcolor=(255, 255, 255, 255),
 					unsetcolor=(0, 0, 0, 0),
 				)
-				cracks.blit(mask_surf, (0, 0), special_flags=pygame.BLEND_RGBA_MULT)
+				cracks.blit(mask_surface, (0, 0), special_flags=pygame.BLEND_RGBA_MULT)
 				surface.blit(cracks, (draw_x, draw_y))
 			return
 
@@ -265,8 +285,8 @@ class Platform:
 		draw_x = int(self.x)
 		draw_y = int(self.y)
 		surface.blit(platform_surf, (draw_x, draw_y))
-		if crack_lines:
-			cracks = self._make_cracks(crack_lines, crack_alpha)
+		if self.crack_lines_max:
+			cracks = self._make_cracks(self.crack_lines_max, crack_alpha)
 			surface.blit(cracks, (draw_x, draw_y))
 
 	def _make_cracks(self, count, alpha):
