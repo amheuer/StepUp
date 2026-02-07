@@ -166,7 +166,10 @@ class Game:
 		self.hover_pause_index = None
 		self.hover_game_over = False
 		self.signin_mode = False
+		self.signin_pick_intensity = False
 		self.username_input = ""
+		self.pending_username = ""
+		self.pending_intensity = cfg.INTENSITY
 		self.current_user = None
 		self.users = self._load_users()
 		self.user_save_timer = 0.0
@@ -234,6 +237,26 @@ class Game:
 		"""Return calories per minute based on intensity."""
 		return cfg.INTENSITY.value
 
+	def _apply_intensity(self, intensity):
+		cfg.INTENSITY = intensity
+		for platform in self.platforms:
+			if platform.kind == "fragile":
+				platform.fade_duration = cfg.get_fragile_fade_duration()
+			else:
+				platform.fade_duration = cfg.get_platform_fade_duration()
+
+	def _cycle_intensity(self, step):
+		order = [cfg.Intensity.LOW, cfg.Intensity.MEDIUM, cfg.Intensity.HIGH]
+		if cfg.INTENSITY not in order:
+			cfg.INTENSITY = cfg.Intensity.MEDIUM
+		idx = order.index(cfg.INTENSITY)
+		next_intensity = order[(idx + step) % len(order)]
+		self._apply_intensity(next_intensity)
+		if self.current_user:
+			user = self.users.get(self.current_user)
+			if user is not None:
+				user["intensity"] = cfg.INTENSITY.name
+
 	def _load_users(self):
 		if not USERS_PATH.exists():
 			return {}
@@ -261,28 +284,15 @@ class Game:
 				"max_shuffle_speed_fps": 0.0,
 				"avg_shuffle_speed_fps": 0.0,
 				"pixels_per_foot": None,
+				"intensity": cfg.INTENSITY.name,
 			}
+		if "intensity" not in self.users[key]:
+			self.users[key]["intensity"] = cfg.INTENSITY.name
 		self.current_user = key
 		self.pixels_per_foot = self.users[key].get("pixels_per_foot")
 		if self.pixels_per_foot:
 			self.pixels_per_foot_sum = self.pixels_per_foot
 			self.pixels_per_foot_count = 1
-
-	def _reset_user_stats(self, user):
-		"""Reset all persistent per-user stats."""
-		user.update(
-			{
-				"highscore": 0,
-				"lifetime_calories": 0.0,
-				"minutes_played": 0.0,
-				"balance_ability": 0.0,
-				"max_jump_height_ft": 0.0,
-				"avg_jump_height_ft": 0.0,
-				"max_shuffle_speed_fps": 0.0,
-				"avg_shuffle_speed_fps": 0.0,
-				"pixels_per_foot": None,
-			}
-		)
 
 	def _reset_balance_tracking(self):
 		self.balance_jump_v_sum = 0.0
@@ -825,18 +835,59 @@ class Game:
 				continue
 			elif event.type == pygame.KEYDOWN:
 				if self.signin_mode:
+					if self.signin_pick_intensity:
+						if event.key in (pygame.K_LEFT, pygame.K_a):
+							order = [cfg.Intensity.LOW, cfg.Intensity.MEDIUM, cfg.Intensity.HIGH]
+							idx = order.index(self.pending_intensity)
+							self.pending_intensity = order[(idx - 1) % len(order)]
+						elif event.key in (pygame.K_RIGHT, pygame.K_d):
+							order = [cfg.Intensity.LOW, cfg.Intensity.MEDIUM, cfg.Intensity.HIGH]
+							idx = order.index(self.pending_intensity)
+							self.pending_intensity = order[(idx + 1) % len(order)]
+						elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
+							if self.pending_username:
+								self._ensure_user(self.pending_username)
+								user = self.users.get(self.current_user)
+								if user is not None:
+									user["intensity"] = self.pending_intensity.name
+								self._apply_intensity(self.pending_intensity)
+								self.calories = 0.0
+								self.display_calories = 0.0
+								self.pending_username = ""
+								self.pending_intensity = cfg.INTENSITY
+								self.signin_pick_intensity = False
+								self.signin_mode = False
+								self._save_users()
+						elif event.key == pygame.K_ESCAPE:
+							self.username_input = self.pending_username
+							self.pending_username = ""
+							self.pending_intensity = cfg.INTENSITY
+							self.signin_pick_intensity = False
+						continue
 					if event.key == pygame.K_RETURN:
 						name = self.username_input.strip().upper()
 						if name:
-							is_new = name not in self.users
-							self._ensure_user(name)
-							if is_new:
+							existed = name in self.users
+							if existed:
+								self._ensure_user(name)
 								user = self.users.get(self.current_user)
-								if user is not None:
-									self._reset_user_stats(user)
-							self.username_input = ""
-							self.signin_mode = False
-							self._save_users()
+								if user is not None and "intensity" in user:
+									try:
+										self._apply_intensity(cfg.Intensity[user["intensity"]])
+									except Exception:
+										pass
+								self.calories = 0.0
+								self.display_calories = 0.0
+								self.username_input = ""
+								self.pending_username = ""
+								self.pending_intensity = cfg.INTENSITY
+								self.signin_mode = False
+								self._save_users()
+							else:
+								self.pending_username = name
+								self.pending_intensity = cfg.INTENSITY
+								self.signin_pick_intensity = True
+								self.username_input = ""
 					elif event.key == pygame.K_ESCAPE:
 						self.username_input = ""
 						self.signin_mode = False
@@ -1156,29 +1207,107 @@ class Game:
 		"""Draw score and game over text."""
 		self.game_over_rect = None
 		if self.game_over:
+			def render_scaled(text, scale):
+				surf = self.font.render(text, True, COLOR_GAME_OVER)
+				if scale != 1:
+					surf = pygame.transform.smoothscale(
+						surf,
+						(
+							max(1, int(surf.get_width() * scale)),
+							max(1, int(surf.get_height() * scale)),
+						),
+					)
+				return surf
+
+			panel_w = int(WINDOW_WIDTH * 0.8) + 20
+			panel_h = int(WINDOW_HEIGHT * 0.68)
+			panel_x = (WINDOW_WIDTH - panel_w) // 2
+			panel_y = (WINDOW_HEIGHT - panel_h) // 2
+			panel_rect = pygame.Rect(panel_x, panel_y, panel_w, panel_h)
+			pygame.draw.rect(self.game_surface, COLOR_BARS, panel_rect)
+			pygame.draw.rect(self.game_surface, (0, 0, 0), panel_rect, 2)
+
+			title = render_scaled("ROUND SUMMARY", 0.5)
+			self.game_surface.blit(
+				title,
+				(panel_x + (panel_w - title.get_width()) // 2, panel_y + 12),
+			)
+
+			per_hour_stepup = float(cfg.INTENSITY.value)
+			per_hour_jog = 8.5
+			per_hour_walk = 4.0
+			balance = self._compute_balance_ability()
+			max_jump = self._format_feet_inches(self.max_jump_height_ft).upper()
+			avg_jump = self._format_feet_inches(self.avg_jump_height_ft).upper()
+			avg_shuffle = f"{self.avg_shuffle_speed_fps:.2f} FT/S"
+			max_shuffle = f"{self.max_shuffle_speed_fps:.2f} FT/S"
+			metric_lines = [
+				f"BALANCE: {balance:.2f}",
+				f"MAX JUMP HEIGHT: {max_jump}",
+				f"AVG JUMP HEIGHT: {avg_jump}",
+				f"AVG SHUFFLE SPEED: {avg_shuffle}",
+				f"MAX SHUFFLE SPEED: {max_shuffle}",
+			]
+			metrics_y = panel_y + 12 + title.get_height() + 12
+			last_metric_y = metrics_y
+			line_gap = 6
+			for i, line in enumerate(metric_lines):
+				text = render_scaled(line, 0.4)
+				line_y = metrics_y + i * (text.get_height() + line_gap)
+				self.game_surface.blit(text, (panel_x + 24, line_y))
+				last_metric_y = line_y + text.get_height()
+
 			selected = self.hover_game_over or True
 			prefix = "> " if selected else "  "
-			label = f"GAME OVER - {prefix}RESTART"
-			game_over_text = self.font.render(label, True, COLOR_GAME_OVER)
-			game_over_text = pygame.transform.smoothscale(
-				game_over_text,
-				(
-					max(1, game_over_text.get_width() // 2.5),
-					max(1, game_over_text.get_height() // 2.5),
-				),
+			label = f"{prefix}RESTART"
+			game_over_text = render_scaled(label, 0.4)
+			btn_w = game_over_text.get_width() + 16
+			btn_h = game_over_text.get_height() + 10
+			btn_x = panel_x + (panel_w - btn_w) // 2
+			btn_y = panel_y + panel_h - btn_h - 12
+			btn_rect = pygame.Rect(btn_x, btn_y, btn_w, btn_h)
+
+			# Bar graph: calories per hour comparison
+			graph_w = panel_w - 48
+			graph_x = panel_x + 24
+			graph_label = render_scaled("AVG CALORIES BURNED PER HOUR", 0.3)
+			graph_label_h = graph_label.get_height()
+			label_sample = render_scaled("GAME", 0.3)
+			label_h = label_sample.get_height()
+			graph_bottom = min(panel_y + panel_h - 16, btn_y - 8 - label_h)
+			graph_top = last_metric_y + 20 + graph_label_h
+			graph_h = max(36, graph_bottom - graph_top)
+			graph_y = graph_bottom - graph_h
+			max_val = max(per_hour_stepup, per_hour_jog, per_hour_walk, 1.0)
+			bars = [
+				("WALKING", per_hour_walk, (80, 80, 80)),
+				("JOGGING", per_hour_jog, (40, 40, 40)),
+				("STEPUP", per_hour_stepup, (0, 0, 0)),
+			]
+			bar_gap = 12
+			bar_w = (graph_w - bar_gap * (len(bars) - 1)) // len(bars)
+			self.game_surface.blit(
+				graph_label,
+				(panel_x + (panel_w - graph_label.get_width()) // 2, graph_y - graph_label_h - 10),
 			)
-			box_padding = 10
-			box_w = game_over_text.get_width() + box_padding * 2
-			box_h = game_over_text.get_height() + box_padding * 2
-			box_x = (WINDOW_WIDTH - box_w) // 2
-			box_y = WINDOW_HEIGHT // 2 - 20 - box_padding
-			box_rect = pygame.Rect(box_x, box_y, box_w, box_h)
-			pygame.draw.rect(self.game_surface, COLOR_BARS, box_rect)
-			pygame.draw.rect(self.game_surface, (0, 0, 0), box_rect, 2)
-			x = box_x + box_padding
-			y = box_y + box_padding
-			self.game_surface.blit(game_over_text, (x, y))
-			self.game_over_rect = box_rect
+			for i, (label, val, color) in enumerate(bars):
+				bar_h = int((val / max_val) * graph_h)
+				bx = graph_x + i * (bar_w + bar_gap)
+				by = graph_y + (graph_h - bar_h)
+				pygame.draw.rect(self.game_surface, color, pygame.Rect(bx, by, bar_w, bar_h))
+				lbl = render_scaled(label, 0.3)
+				self.game_surface.blit(
+					lbl,
+					(bx + (bar_w - lbl.get_width()) // 2, graph_y + graph_h + 2),
+				)
+
+			pygame.draw.rect(self.game_surface, COLOR_BARS, btn_rect)
+			pygame.draw.rect(self.game_surface, (0, 0, 0), btn_rect, 2)
+			self.game_surface.blit(
+				game_over_text,
+				(btn_x + (btn_w - game_over_text.get_width()) // 2, btn_y + 5),
+			)
+			self.game_over_rect = btn_rect
 		if self.paused:
 			title = self.font.render("SETTINGS", True, COLOR_GAME_OVER)
 			title = pygame.transform.smoothscale(
@@ -1328,26 +1457,9 @@ class Game:
 				cal_x = right_bar_left + 16
 				self.screen.blit(cal_text, (cal_x, 20))
 
-			self._draw_cv_overlay(screen_w, screen_h)
 
 		pygame.display.flip()
 		self._update_cursor()
-
-	def _draw_cv_overlay(self, screen_w, screen_h):
-		"""Draw CV controls in bottom-left corner."""
-		if not self.cv_state:
-			return
-
-		controls_w = 180
-		controls_h = 105
-		padding = 24
-		x = padding
-		y = screen_h - padding - controls_h
-
-		self._draw_controls_widget(x, y, controls_w, controls_h)
-		if self.jump_flash_timer > 0:
-			label = self.subtitle_font.render("JUMP", True, COLOR_BARS_TEXT)
-			self.screen.blit(label, (x, y - label.get_height() - 6))
 
 	def _draw_controls_widget(self, x, y, w, h):
 		active_color = (*COLOR_BARS_TEXT, 220)
@@ -1541,12 +1653,34 @@ class Game:
 
 		# Sign-in prompt / status
 		if self.signin_mode:
-			label = f"USERNAME: {self.username_input}_"
-			prompt = self.subtitle_font.render(label, True, COLOR_BARS_TEXT)
-			self.screen.blit(
-				prompt,
-				((screen_w - prompt.get_width()) // 2, ty + text.get_height() + 16),
-			)
+			base_y = ty + text.get_height() + 16
+			line_h = self.subtitle_font.get_height()
+			gap = 6
+			if self.signin_pick_intensity:
+				name_line = f"USERNAME: {self.pending_username}"
+				intensity_line = f"INTENSITY: {self.pending_intensity.name}"
+				prompt = self.subtitle_font.render(name_line, True, COLOR_BARS_TEXT)
+				self.screen.blit(
+					prompt,
+					((screen_w - prompt.get_width()) // 2, base_y),
+				)
+				choice = self.subtitle_font.render(intensity_line, True, COLOR_BARS_TEXT)
+				self.screen.blit(
+					choice,
+					((screen_w - choice.get_width()) // 2, base_y + line_h + gap),
+				)
+				hint = self.subtitle_font.render("USE LEFT/RIGHT, ENTER TO CONFIRM", True, COLOR_BARS_TEXT)
+				self.screen.blit(
+					hint,
+					((screen_w - hint.get_width()) // 2, base_y + (line_h + gap) * 2),
+				)
+			else:
+				label = f"USERNAME: {self.username_input}_"
+				prompt = self.subtitle_font.render(label, True, COLOR_BARS_TEXT)
+				self.screen.blit(
+					prompt,
+					((screen_w - prompt.get_width()) // 2, base_y),
+				)
 		elif self.current_user:
 			status = self.subtitle_font.render(
 				f"SIGNED IN: {self.current_user}", True, COLOR_BARS_TEXT
