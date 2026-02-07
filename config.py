@@ -31,7 +31,7 @@ MOVING_PLATFORM_SPEED_MIN = 30
 MOVING_PLATFORM_SPEED_MAX = 70
 PLATFORM_FADE_DURATION = 3  # Seconds before platform disappears after landing
 FRAGILE_PLATFORM_CHANCE = 0.12
-FRAGILE_PLATFORM_FADE_DURATION = 1.5
+FRAGILE_PLATFORM_FADE_DURATION = PLATFORM_FADE_DURATION / 2
 MAX_PLATFORM_GAP = 90  # Max vertical gap for non-moving platforms
 MIN_PLATFORM_GAP = 75  # Min vertical gap for non-moving platforms
 
@@ -60,9 +60,20 @@ class Intensity(Enum):
 
 INTENSITY = Intensity.MEDIUM
 
+PLATFORM_FADE_BY_INTENSITY = {
+	Intensity.HIGH: 1.85,
+	Intensity.MEDIUM: 2.2,
+	Intensity.LOW: 3.0,
+}
+
+def get_platform_fade_duration():
+	return PLATFORM_FADE_BY_INTENSITY.get(INTENSITY, PLATFORM_FADE_DURATION)
+
+def get_fragile_fade_duration():
+	return FRAGILE_PLATFORM_FADE_DURATION
+
 # Coins
 COIN_RADIUS = 18
 COIN_COLOR = (240, 200, 60)
 COIN_VALUE = 100
 COIN_SPAWN_CHANCE = 0.35
-from enum import Enum

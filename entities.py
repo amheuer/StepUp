@@ -8,11 +8,12 @@ from config import (
 	COLOR_PLAYER,
 	COLOR_PLATFORM,
 	COLOR_PLATFORM_FRAGILE,
-	FRAGILE_PLATFORM_FADE_DURATION,
+	get_fragile_fade_duration,
 	GRAVITY,
 	JUMP_COOLDOWN,
 	JUMP_REARM_TIME,
 	JUMP_STRENGTH,
+	get_platform_fade_duration,
 	MOVING_PLATFORM_SPEED_MAX,
 	MOVING_PLATFORM_SPEED_MIN,
 	PLATFORM_FADE_DURATION,
@@ -219,7 +220,7 @@ class Platform:
 			else 0
 		)
 		self.fade_duration = (
-			FRAGILE_PLATFORM_FADE_DURATION if kind == "fragile" else PLATFORM_FADE_DURATION
+			get_fragile_fade_duration() if kind == "fragile" else get_platform_fade_duration()
 		)
 
 		# Lifetime tracking

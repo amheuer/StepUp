@@ -8,6 +8,7 @@ from pathlib import Path
 import json
 
 import pygame
+import config as cfg
 
 from cv_tester import CVController, CVState
 from collisions import check_if_on_platform
@@ -29,7 +30,6 @@ from config import (
 	WINDOW_WIDTH,
 	COIN_RADIUS,
 	COIN_VALUE,
-	INTENSITY,
 	PLAYER_RADIUS,
 	PLAYER_MAX_X_SPEED,
 	PLAYER_MAX_SPEED,
@@ -130,7 +130,7 @@ class Game:
 		self.game_over = False
 		self.paused = False
 		self.pause_index = 0
-		self.pause_options = ["RESUME", "MUSIC", "SFX", "RESTART", "MAIN MENU", "QUIT"]
+		self.pause_options = ["RESUME", "MUSIC", "SFX", "INTENSITY", "RESTART", "MAIN MENU", "QUIT"]
 		self.in_menu = True
 		self.in_health = False
 		self.menu_index = 0
@@ -182,7 +182,7 @@ class Game:
 
 	def _update_calories(self):
 		"""Return calories per minute based on intensity."""
-		return INTENSITY.value
+		return cfg.INTENSITY.value
 
 	def _load_users(self):
 		if not USERS_PATH.exists():
@@ -406,6 +406,16 @@ class Game:
 					pygame.draw.rect(surf, COLOR_BARS_PATTERN, (x, y, tile, tile))
 		return surf
 
+	def _cycle_intensity(self, step):
+		levels = [cfg.Intensity.LOW, cfg.Intensity.MEDIUM, cfg.Intensity.HIGH]
+		idx = levels.index(cfg.INTENSITY)
+		cfg.INTENSITY = levels[(idx + step) % len(levels)]
+		for platform in self.platforms:
+			if platform.kind == "fragile":
+				platform.fade_duration = cfg.get_fragile_fade_duration()
+			else:
+				platform.fade_duration = cfg.get_platform_fade_duration()
+
 	def _start_game(self):
 		"""Handle the PLAY action: capture photos if needed, then start."""
 		self._ensure_user_photos()
@@ -521,6 +531,8 @@ class Game:
 							for s in self.sfx.values():
 								s.set_volume(self.sfx_volume)
 							self.sfx["coin.wav"].set_volume(min(0.35, self.sfx_volume))
+						elif choice == "INTENSITY":
+							self._cycle_intensity(-1)
 					elif event.key in (pygame.K_RIGHT, pygame.K_d):
 						choice = self.pause_options[self.pause_index]
 						if choice == "MUSIC":
@@ -531,6 +543,8 @@ class Game:
 							for s in self.sfx.values():
 								s.set_volume(self.sfx_volume)
 							self.sfx["coin.wav"].set_volume(min(0.35, self.sfx_volume))
+						elif choice == "INTENSITY":
+							self._cycle_intensity(1)
 					elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
 						choice = self.pause_options[self.pause_index]
 						if choice == "RESUME":
@@ -784,11 +798,27 @@ class Game:
 					lines.append(f"MUSIC: {int(self.music_volume * 100)}%")
 				elif opt == "SFX":
 					lines.append(f"SFX: {int(self.sfx_volume * 100)}%")
+				elif opt == "INTENSITY":
+					lines.append(f"INTENSITY: {cfg.INTENSITY.name}")
 				else:
 					lines.append(opt)
 			rendered = []
 			self.pause_option_rects = {}
 			max_w = title.get_width()
+			# Ensure width fits the longest INTENSITY label
+			for i, line in enumerate(lines):
+				if line.startswith("INTENSITY:"):
+					line = "INTENSITY: MEDIUM"
+				test = self.font.render("> " + line, True, COLOR_GAME_OVER)
+				test = pygame.transform.smoothscale(
+					test,
+					(
+						max(1, test.get_width() // 2),
+						max(1, test.get_height() // 2),
+					),
+				)
+				if test.get_width() > max_w:
+					max_w = test.get_width()
 			for i, line in enumerate(lines):
 				selected = i == self.pause_index or i == self.hover_pause_index
 				prefix = "> " if selected else "  "
@@ -801,17 +831,6 @@ class Game:
 					),
 				)
 				rendered.append(text)
-				# Ensure width accounts for selector prefix even when not selected.
-				test = self.font.render("> " + line, True, COLOR_GAME_OVER)
-				test = pygame.transform.smoothscale(
-					test,
-					(
-						max(1, test.get_width() // 2),
-						max(1, test.get_height() // 2),
-					),
-				)
-				if test.get_width() > max_w:
-					max_w = test.get_width()
 			total_h = title.get_height() + sum(t.get_height() for t in rendered) + 10 * len(rendered)
 			box_padding = 12
 			box_w = max_w + box_padding * 2
