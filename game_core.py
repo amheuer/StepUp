@@ -3,6 +3,7 @@
 import sys
 import random
 from pathlib import Path
+import json
 
 import pygame
 
@@ -54,6 +55,7 @@ TILESET_PATH = (
 	/ "Tileset"
 	/ "Tileset.png"
 )
+USERS_PATH = Path(__file__).resolve().parent / "users.json"
 PLAYER_DIR = Path(__file__).resolve().parent / "assets" / "player_images"
 
 
@@ -102,7 +104,17 @@ class Game:
 		self.in_menu = True
 		self.in_health = False
 		self.menu_index = 0
-		self.menu_options = ["PLAY", "HEALTH  INFO"]
+		self.menu_options = ["PLAY", "HEALTH  INFO", "SIGN IN"]
+		self.menu_option_rects = {}
+		self.signin_rect = None
+		self.pause_option_rects = {}
+		self.render_scale = 1.0
+		self.render_offset = (0, 0)
+		self.signin_mode = False
+		self.username_input = ""
+		self.current_user = None
+		self.users = self._load_users()
+		self.user_save_timer = 0.0
 
 	def reset(self):
 		"""Reset game state for a new game."""
@@ -123,6 +135,30 @@ class Game:
 	def _update_calories(self):
 		"""Return calories per minute based on intensity."""
 		return INTENSITY.value
+
+	def _load_users(self):
+		if not USERS_PATH.exists():
+			return {}
+		try:
+			return json.loads(USERS_PATH.read_text())
+		except Exception:
+			return {}
+
+	def _save_users(self):
+		try:
+			USERS_PATH.write_text(json.dumps(self.users, indent=2))
+		except Exception:
+			pass
+
+	def _ensure_user(self, username):
+		key = username.strip().upper()
+		if key not in self.users:
+			self.users[key] = {
+				"highscore": 0,
+				"lifetime_calories": 0.0,
+				"minutes_played": 0.0,
+			}
+		self.current_user = key
 
 	def _load_sfx(self):
 		"""Load sound effects by filename."""
@@ -210,6 +246,17 @@ class Game:
 		self.game_surface.blit(surface, (0, -offset))
 		self.game_surface.blit(surface, (0, -offset + height))
 
+	def _screen_to_game(self, pos):
+		"""Convert screen coordinates to game-surface coordinates."""
+		ox, oy = self.render_offset
+		if self.render_scale <= 0:
+			return None
+		gx = (pos[0] - ox) / self.render_scale
+		gy = (pos[1] - oy) / self.render_scale
+		if gx < 0 or gy < 0 or gx > WINDOW_WIDTH or gy > WINDOW_HEIGHT:
+			return None
+		return (gx, gy)
+
 	def _build_bar_pattern(self, width, height):
 		"""Create a subtle square pattern for the side bars."""
 		surf = pygame.Surface((width, height))
@@ -238,22 +285,86 @@ class Game:
 		"""Process input events."""
 		for event in pygame.event.get():
 			if event.type == pygame.QUIT:
+				self._save_users()
 				self.running = False
+			elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+				pos = event.pos
+				if self.in_menu:
+					for key, rect in self.menu_option_rects.items():
+						if rect.collidepoint(pos):
+							if key == "PLAY":
+								self.reset()
+								self.in_menu = False
+								self.in_health = False
+							elif key.startswith("HEALTH"):
+								self.in_menu = False
+								self.in_health = True
+							elif key == "SIGN IN":
+								self.signin_mode = True
+							break
+					continue
+				if self.paused:
+					game_pos = self._screen_to_game(pos)
+					if not game_pos:
+						continue
+					gx, gy = game_pos
+					for key, rect in self.pause_option_rects.items():
+						if rect.collidepoint(gx, gy):
+							if key == "RESUME":
+								self.paused = False
+							elif key == "RESTART":
+								self.reset()
+								self.game_over = False
+								self.paused = False
+							elif key == "MAIN MENU":
+								self.paused = False
+								self.in_health = False
+								self.in_menu = True
+							elif key == "QUIT":
+								self.running = False
+							break
+				continue
 			elif event.type == pygame.KEYDOWN:
+				if self.signin_mode:
+					if event.key == pygame.K_RETURN:
+						name = self.username_input.strip().upper()
+						if name:
+							self._ensure_user(name)
+							self.username_input = ""
+							self.signin_mode = False
+							self._save_users()
+					elif event.key == pygame.K_ESCAPE:
+						self.username_input = ""
+						self.signin_mode = False
+					elif event.key == pygame.K_BACKSPACE:
+						self.username_input = self.username_input[:-1]
+					else:
+						char = event.unicode.upper()
+						if char.isprintable() and len(self.username_input) < 16:
+							self.username_input += char
+					continue
 				if self.in_menu:
 					if event.key in (pygame.K_LEFT, pygame.K_a):
 						self.menu_index = (self.menu_index - 1) % len(self.menu_options)
 					elif event.key in (pygame.K_RIGHT, pygame.K_d):
 						self.menu_index = (self.menu_index + 1) % len(self.menu_options)
+					if event.key == pygame.K_TAB:
+						self.signin_mode = True
+						continue
+					if event.key == pygame.K_i:
+						self.signin_mode = True
+						continue
 					elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
 						choice = self.menu_options[self.menu_index]
 						if choice == "PLAY":
 							self.reset()
 							self.in_menu = False
 							self.in_health = False
-						elif choice == "HEALTH":
+						elif choice.startswith("HEALTH"):
 							self.in_menu = False
 							self.in_health = True
+						elif choice == "SIGN IN":
+							self.signin_mode = True
 					elif event.key == pygame.K_ESCAPE:
 						self.running = False
 					continue
@@ -383,6 +494,10 @@ class Game:
 		self.score = int(self.height_jumped * 2) + self.coins_collected * COIN_VALUE
 		if self.score > self.high_score:
 			self.high_score = self.score
+		if self.current_user:
+			user = self.users[self.current_user]
+			if self.high_score > user["highscore"]:
+				user["highscore"] = self.high_score
 		if play_sfx and self.high_score >= self.next_high_score_sfx:
 			self.sfx["power_up.wav"].play()
 			self.next_high_score_sfx += 1000
@@ -401,6 +516,14 @@ class Game:
 		self.calories += per_min * (dt / 60.0)
 		if self.player.jumped_this_frame:
 			self.display_calories = self.calories
+		if self.current_user:
+			user = self.users[self.current_user]
+			user["lifetime_calories"] += per_min * (dt / 60.0)
+			user["minutes_played"] += dt / 60.0
+			self.user_save_timer += dt
+			if self.user_save_timer >= 5.0:
+				self._save_users()
+				self.user_save_timer = 0.0
 
 	def draw_background(self):
 		"""Draw layered background with parallax bubbles."""
@@ -461,6 +584,7 @@ class Game:
 				else:
 					lines.append(opt)
 			rendered = []
+			self.pause_option_rects = {}
 			max_w = title.get_width()
 			for i, line in enumerate(lines):
 				prefix = "> " if i == self.pause_index else "  "
@@ -497,8 +621,11 @@ class Game:
 			y = box_y + box_padding
 			self.game_surface.blit(title, (x, y))
 			y += title.get_height() + 10
-			for t in rendered:
+			for i, t in enumerate(rendered):
 				self.game_surface.blit(t, (x, y))
+				self.pause_option_rects[self.pause_options[i]] = pygame.Rect(
+					x, y, t.get_width(), t.get_height()
+				)
 				y += t.get_height() + 10
 
 	def draw(self):
@@ -526,6 +653,8 @@ class Game:
 			scaled_h = int(WINDOW_HEIGHT * scale)
 			offset_x = (screen_w - scaled_w) // 2
 			offset_y = (screen_h - scaled_h) // 2
+			self.render_scale = scale
+			self.render_offset = (offset_x, offset_y)
 
 			self.screen.fill(COLOR_BARS)
 			scaled_surface = pygame.transform.smoothscale(self.game_surface, (scaled_w, scaled_h))
@@ -564,6 +693,27 @@ class Game:
 				self.screen.blit(cal_text, (cal_x, 20))
 
 		pygame.display.flip()
+		self._update_cursor()
+
+	def _update_cursor(self):
+		"""Update mouse cursor based on hover state."""
+		hover = False
+		mx, my = pygame.mouse.get_pos()
+		if self.in_menu:
+			for rect in self.menu_option_rects.values():
+				if rect.collidepoint(mx, my):
+					hover = True
+					break
+		elif self.paused:
+			game_pos = self._screen_to_game((mx, my))
+			if game_pos:
+				gx, gy = game_pos
+				for rect in self.pause_option_rects.values():
+					if rect.collidepoint(gx, gy):
+						hover = True
+						break
+		cursor = pygame.SYSTEM_CURSOR_HAND if hover else pygame.SYSTEM_CURSOR_ARROW
+		pygame.mouse.set_cursor(cursor)
 
 	def _draw_menu_screen(self, screen_w, screen_h):
 		if self.menu_pattern_size != (screen_w, screen_h):
@@ -599,29 +749,98 @@ class Game:
 			6,
 		)
 
+		self.menu_option_rects = {}
 		options = []
 		for i, opt in enumerate(self.menu_options):
 			prefix = "> " if i == self.menu_index else "  "
 			options.append(self.menu_font.render(prefix + opt, True, COLOR_BARS_TEXT))
 		spacing = 30
-		total_w = options[0].get_width() + options[1].get_width() + spacing
+		total_w = sum(o.get_width() for o in options) + spacing * (len(options) - 1)
 		start_x = (screen_w - total_w) // 2
 		ty = sub_y + subtitle.get_height() + 40
+		x = start_x
+		self.menu_option_rects = {}
 		for i, text in enumerate(options):
-			tx = start_x
-			if i == 1:
-				tx += options[0].get_width() + spacing
-			self.screen.blit(text, (tx, ty))
+			self.screen.blit(text, (x, ty))
+			self.menu_option_rects[self.menu_options[i]] = pygame.Rect(
+				x, ty, text.get_width(), text.get_height()
+			)
+			x += text.get_width() + spacing
+
+		# Sign-in prompt / status
+		if self.signin_mode:
+			label = f"USERNAME: {self.username_input}_"
+			prompt = self.subtitle_font.render(label, True, COLOR_BARS_TEXT)
+			self.screen.blit(
+				prompt,
+				((screen_w - prompt.get_width()) // 2, ty + text.get_height() + 16),
+			)
+		elif self.current_user:
+			status = self.subtitle_font.render(
+				f"SIGNED IN: {self.current_user}", True, COLOR_BARS_TEXT
+			)
+			self.screen.blit(
+				status,
+				((screen_w - status.get_width()) // 2, ty + text.get_height() + 16),
+			)
+		self.signin_rect = None
 
 	def _draw_health_screen(self, screen_w, screen_h):
 		if self.menu_pattern_size != (screen_w, screen_h):
 			self.menu_pattern_surface = self._build_menu_pattern(screen_w, screen_h)
 			self.menu_pattern_size = (screen_w, screen_h)
 		self.screen.blit(self.menu_pattern_surface, (0, 0))
-		title = self.title_font.render("HEALTH INFO", True, COLOR_BARS_TEXT)
-		sub = self.subtitle_font.render("COMING SOON", True, COLOR_BARS_TEXT)
-		self.screen.blit(title, ((screen_w - title.get_width()) // 2, screen_h // 2 - 40))
-		self.screen.blit(sub, ((screen_w - sub.get_width()) // 2, screen_h // 2 + 10))
+		title = self.subtitle_font.render("HEALTH INFO", True, COLOR_BARS_TEXT)
+		if not self.current_user:
+			sub = self.subtitle_font.render("SIGN IN TO VIEW METRICS", True, COLOR_BARS_TEXT)
+			self.screen.blit(sub, ((screen_w - sub.get_width()) // 2, screen_h // 2 - 20))
+			return
+		user = self.users.get(self.current_user, {})
+		lines = [
+			f"USER: {self.current_user}",
+			f"HIGHSCORE: {user.get('highscore', 0)}",
+			f"LIFETIME CALORIES: {user.get('lifetime_calories', 0.0):.2f}",
+			f"MINUTES PLAYED: {user.get('minutes_played', 0.0):.1f}",
+		]
+		line_surfs = [self.subtitle_font.render(line, True, COLOR_BARS_TEXT) for line in lines]
+		max_w = max(s.get_width() for s in line_surfs)
+		total_h = sum(s.get_height() for s in line_surfs) + 8 * (len(line_surfs) - 1)
+		sprite = Player.sprite_stand if Player.sprites_loaded else None
+		gap = 20
+		block_w = max_w
+		sprite_big = None
+		if sprite:
+			scale = 6
+			sprite_big = pygame.transform.smoothscale(
+				sprite, (sprite.get_width() * scale, sprite.get_height() * scale)
+			)
+			block_w = max_w + sprite_big.get_width() + gap
+
+		block_h = total_h
+		if sprite_big:
+			block_h = max(total_h, sprite_big.get_height())
+
+		start_x = (screen_w - block_w) // 2
+		start_y = (screen_h - block_h) // 2 + 20
+
+		title_x = start_x + (block_w - title.get_width()) // 2
+		title_y = start_y - title.get_height() - 16
+		self.screen.blit(title, (title_x, title_y))
+
+		if sprite_big:
+			sprite_x = start_x + max_w + gap
+			sprite_y = start_y + (block_h - sprite_big.get_height()) // 2
+			self.screen.blit(sprite_big, (sprite_x, sprite_y))
+			text_x = start_x
+			text_y = start_y + (block_h - total_h) // 2
+		else:
+			text_x = start_x
+			text_y = start_y
+
+		y = text_y
+		for s in line_surfs:
+			self.screen.blit(s, (text_x, y))
+			y += s.get_height() + 8
 
 	def run(self):
 		"""Main game loop."""
