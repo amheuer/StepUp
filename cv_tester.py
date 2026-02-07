@@ -47,7 +47,7 @@ CONFIDENCE_THRESH = 0.35   # detection confidence threshold (0.0 - 1.0)
 MAX_DETECTIONS = 5         # maximum number of person detections to process (you asked for 1)
 IOU_NMS = 0.45             # iou/nms threshold if you want to use in model.predict (left as var)
 USE_USB_WEBCAM = True      # True = use USB webcam index, False = use built-in/default camera
-WEBCAM_INDEX = 4         # USB webcam index (set to your USB device)
+WEBCAM_INDEX = 2         # USB webcam index (set to your USB device)
 FRAME_WIDTH = None         # if None, use webcam default
 FRAME_HEIGHT = None
 TARGET_FPS = 24            # cap processing rate

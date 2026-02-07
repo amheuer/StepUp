@@ -174,6 +174,7 @@ class Game:
 		self.users = self._load_users()
 		self.user_save_timer = 0.0
 		self.game_over_rect = None
+		self.in_capture = False
 		self._init_cv()
 		if self.in_menu:
 			self._play_music(self.menu_music_path, restart=True)
@@ -293,6 +294,23 @@ class Game:
 		if self.pixels_per_foot:
 			self.pixels_per_foot_sum = self.pixels_per_foot
 			self.pixels_per_foot_count = 1
+
+	def _reset_user_stats(self, user):
+		"""Reset all persistent per-user stats."""
+		user.update(
+			{
+				"highscore": 0,
+				"lifetime_calories": 0.0,
+				"minutes_played": 0.0,
+				"balance_ability": 0.0,
+				"max_jump_height_ft": 0.0,
+				"avg_jump_height_ft": 0.0,
+				"max_shuffle_speed_fps": 0.0,
+				"avg_shuffle_speed_fps": 0.0,
+				"pixels_per_foot": None,
+			}
+		)
+
 
 	def _reset_balance_tracking(self):
 		self.balance_jump_v_sum = 0.0
@@ -515,6 +533,7 @@ class Game:
 		pygame.display.iconify()
 
 		try:
+			self.in_capture = True
 			self._play_music(self.menu_music_path)
 			success = capture_and_process_for_user(
 				player_dir=str(sprite_dir),
@@ -523,6 +542,8 @@ class Game:
 		except Exception as exc:
 			print(f"[WARN] Photo capture failed: {exc}")
 			success = False
+		finally:
+			self.in_capture = False
 
 		# Restore the pygame window *behind* the still-open black CV window
 		self.screen = pygame.display.set_mode((0, 0), pygame.FULLSCREEN)
@@ -1169,18 +1190,25 @@ class Game:
 				pygame.mixer.music.stop()
 				self.game_over = True
 
-		per_min = self._update_calories()
-		self.calories += per_min * (dt / 60.0)
-		if self.player.jumped_this_frame:
-			self.display_calories = self.calories
-		if self.current_user:
-			user = self.users[self.current_user]
-			user["lifetime_calories"] += per_min * (dt / 60.0)
-			user["minutes_played"] += dt / 60.0
-			self.user_save_timer += dt
-			if self.user_save_timer >= 5.0:
-				self._save_users()
-				self.user_save_timer = 0.0
+		active_play = True
+		if self.in_capture or self.paused or self.game_over:
+			active_play = False
+		elif self.cv is not None:
+			active_play = bool(getattr(self.cv_state, "has_person", False))
+		if active_play:
+			per_min = self._update_calories()
+			prev_calories = self.calories
+			self.calories += per_min * (dt / 60.0)
+			if self.player.jumped_this_frame:
+				self.display_calories = self.calories
+			if self.current_user:
+				user = self.users[self.current_user]
+				user["lifetime_calories"] += per_min * (dt / 60.0)
+				user["minutes_played"] += dt / 60.0
+				self.user_save_timer += dt
+				if self.user_save_timer >= 5.0:
+					self._save_users()
+					self.user_save_timer = 0.0
 		
 		if self.jump_flash_timer > 0:
 			self.jump_flash_timer = max(0.0, self.jump_flash_timer - dt)
@@ -1458,7 +1486,6 @@ class Game:
 				right_bar_left = offset_x + scaled_w
 				cal_x = right_bar_left + 16
 				self.screen.blit(cal_text, (cal_x, 20))
-
 
 		pygame.display.flip()
 		self._update_cursor()
