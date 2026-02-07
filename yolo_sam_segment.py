@@ -12,6 +12,17 @@ import time
 from pathlib import Path
 from ultralytics import YOLO, SAM
 
+# Detect screen resolution once at module load
+try:
+    import tkinter as _tk
+    _root = _tk.Tk()
+    _root.withdraw()
+    _SCREEN_W = _root.winfo_screenwidth()
+    _SCREEN_H = _root.winfo_screenheight()
+    _root.destroy()
+except Exception:
+    _SCREEN_W, _SCREEN_H = 1920, 1080
+
 
 def capture_from_webcam(save_path: str = "capture.jpg", countdown: int = 10,
                         reference_image: str = None, pose_name: str = None,
@@ -20,12 +31,16 @@ def capture_from_webcam(save_path: str = "capture.jpg", countdown: int = 10,
     Open the webcam, show a live preview with a countdown timer,
     then capture and save a frame.
 
+    A YOLO detector finds the closest person each frame and the
+    reference outline is scaled to fit that person's bounding box
+    instead of using a fixed size.
+
     Args:
         save_path: Where to save the captured image.
         countdown: Seconds to wait before capturing.
         reference_image: Optional path to a reference/example image to show.
         pose_name: Optional name of the pose to display on screen.
-        ref_scale: Scale multiplier for the reference image (1.0 = full frame height).
+        ref_scale: Extra scale multiplier applied on top of the bbox fit.
 
     Returns:
         The path to the saved image.
@@ -40,9 +55,19 @@ def capture_from_webcam(save_path: str = "capture.jpg", countdown: int = 10,
         ref_img = cv2.imread(reference_image, cv2.IMREAD_UNCHANGED)
         print(f"[INFO] Showing reference: {reference_image}")
 
+    # Load a lightweight YOLO model for person detection
+    yolo_detect = YOLO("yolo11n.pt")
+
     label = f"Pose: {pose_name}" if pose_name else ""
     print(f"[INFO] Webcam opened. Capturing in {countdown} seconds...")
     start_time = time.time()
+
+    # Create a fullscreen window
+    window_name = "Webcam - Get Ready!"
+    cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+    cv2.setWindowProperty(window_name, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
+
+    screen_w, screen_h = _SCREEN_W, _SCREEN_H
 
     while True:
         ret, frame = cap.read()
@@ -57,60 +82,105 @@ def capture_from_webcam(save_path: str = "capture.jpg", countdown: int = 10,
 
         display = frame.copy()
 
-        # Draw the reference image centered and translucent
+        # ── Overlay reference outline onto detected person ──────────
         if ref_img is not None:
-            ref_h, ref_w = ref_img.shape[:2]
-            # Scale reference to fill the frame height, adjusted by ref_scale
-            scale = frame.shape[0] / max(ref_h, 1) * ref_scale
-            new_w = int(ref_w * scale)
-            new_h = int(ref_h * scale)
-            if new_w > 0 and new_h > 0:
-                ref_resized = cv2.resize(ref_img, (new_w, new_h))
-                # Convert grayscale to BGR if needed
-                if len(ref_resized.shape) == 2:
-                    ref_resized = cv2.cvtColor(ref_resized, cv2.COLOR_GRAY2BGR)
+            # Detect people in the current frame
+            det = yolo_detect(frame, conf=0.3, classes=[0], verbose=False)
+            boxes = det[0].boxes
+            bbox = None
+            if boxes is not None and len(boxes) > 0:
+                xyxy = boxes.xyxy.cpu().numpy()
+                areas = (xyxy[:, 2] - xyxy[:, 0]) * (xyxy[:, 3] - xyxy[:, 1])
+                idx = int(np.argmax(areas))
+                bbox = xyxy[idx]  # x1, y1, x2, y2 of the closest person
 
-                # Center horizontally, anchor bottom to screen edge
-                x_off = (frame.shape[1] - new_w) // 2
-                y_off = frame.shape[0] - new_h
+            if bbox is not None:
+                bx1, by1, bx2, by2 = bbox
+                bbox_w = bx2 - bx1
+                bbox_h = by2 - by1
 
-                # Clamp to frame bounds
-                rx1 = max(0, -x_off)
-                ry1 = max(0, -y_off)
-                fx1 = max(0, x_off)
-                fy1 = max(0, y_off)
-                rw = min(new_w - rx1, frame.shape[1] - fx1)
-                rh = min(new_h - ry1, frame.shape[0] - fy1)
+                ref_h, ref_w = ref_img.shape[:2]
 
-                ref_crop = ref_resized[ry1:ry1 + rh, rx1:rx1 + rw]
-                roi = display[fy1:fy1 + rh, fx1:fx1 + rw]
+                # Scale outline to fit the person bbox (match height, preserve aspect ratio)
+                scale = (bbox_h / max(ref_h, 1)) * ref_scale
+                new_w = int(ref_w * scale)
+                new_h = int(ref_h * scale)
 
-                # Build per-pixel mask: white pixels are translucent, black stays black
-                if ref_crop.shape[2] == 4:
-                    # Use alpha channel AND brightness
-                    gray = cv2.cvtColor(ref_crop[:, :, :3], cv2.COLOR_BGR2GRAY)
-                    rgb = ref_crop[:, :, :3]
-                else:
-                    gray = cv2.cvtColor(ref_crop, cv2.COLOR_BGR2GRAY)
-                    rgb = ref_crop
+                if new_w > 0 and new_h > 0:
+                    ref_resized = cv2.resize(ref_img, (new_w, new_h))
+                    if len(ref_resized.shape) == 2:
+                        ref_resized = cv2.cvtColor(ref_resized, cv2.COLOR_GRAY2BGR)
 
-                # White regions (brightness > 128) blend translucently; black regions stay as webcam
-                white_mask = (gray > 128).astype(np.float32)[:, :, np.newaxis]
-                opacity = 0.35
-                blended = (white_mask * (opacity * rgb + (1 - opacity) * roi)
-                           + (1 - white_mask) * roi).astype(np.uint8)
-                display[fy1:fy1 + rh, fx1:fx1 + rw] = blended
+                    # Find the horizontal center of the visible outline content
+                    # so the overlay aligns with the person, not the image center
+                    if ref_resized.shape[2] == 4:
+                        vis_gray = cv2.cvtColor(ref_resized[:, :, :3], cv2.COLOR_BGR2GRAY)
+                    else:
+                        vis_gray = cv2.cvtColor(ref_resized, cv2.COLOR_BGR2GRAY)
+                    cols = np.where(vis_gray > 128)
+                    if len(cols[1]) > 0:
+                        content_cx = int(np.mean(cols[1]))
+                    else:
+                        content_cx = new_w // 2
 
-        # Draw pose name
+                    # Align the outline's content center with the bbox center,
+                    # anchored at the bottom of the bbox
+                    cx = int((bx1 + bx2) / 2)
+                    x_off = cx - content_cx
+                    y_off = int(by2) - new_h
+
+                    # Clamp to frame bounds
+                    rx1 = max(0, -x_off)
+                    ry1 = max(0, -y_off)
+                    fx1 = max(0, x_off)
+                    fy1 = max(0, y_off)
+                    rw = min(new_w - rx1, frame.shape[1] - fx1)
+                    rh = min(new_h - ry1, frame.shape[0] - fy1)
+
+                    if rw > 0 and rh > 0:
+                        ref_crop = ref_resized[ry1:ry1 + rh, rx1:rx1 + rw]
+                        roi = display[fy1:fy1 + rh, fx1:fx1 + rw]
+
+                        if ref_crop.shape[2] == 4:
+                            gray = cv2.cvtColor(ref_crop[:, :, :3], cv2.COLOR_BGR2GRAY)
+                            rgb = ref_crop[:, :, :3]
+                        else:
+                            gray = cv2.cvtColor(ref_crop, cv2.COLOR_BGR2GRAY)
+                            rgb = ref_crop
+
+                        # Build a black outline around the white region
+                        white_binary = (gray > 128).astype(np.uint8)
+                        # Dilate the white region then subtract to get an edge ring
+                        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
+                        dilated = cv2.dilate(white_binary, kernel, iterations=1)
+                        outline_mask = ((dilated - white_binary) > 0).astype(np.float32)[:, :, np.newaxis]
+
+                        white_mask = white_binary.astype(np.float32)[:, :, np.newaxis]
+                        opacity = 0.35
+                        blended = (white_mask * (opacity * rgb + (1 - opacity) * roi)
+                                   + (1 - white_mask) * roi).astype(np.uint8)
+                        # Paint the outline ring black
+                        blended = (outline_mask * np.zeros_like(roi)
+                                   + (1 - outline_mask) * blended).astype(np.uint8)
+                        display[fy1:fy1 + rh, fx1:fx1 + rw] = blended
+
+        # Draw text on the webcam-sized frame (it gets resized to screen after)
+        cam_h, cam_w = display.shape[:2]
+        font_scale_label = cam_h / 400.0
+        font_scale_countdown = cam_h / 200.0
+        thickness = max(2, int(cam_h / 200))
         if label:
-            cv2.putText(display, label, (30, 40),
-                        cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 255, 0), 3, cv2.LINE_AA)
+            cv2.putText(display, label, (20, int(cam_h * 0.07)),
+                        cv2.FONT_HERSHEY_SIMPLEX, font_scale_label, (0, 255, 0), thickness, cv2.LINE_AA)
 
         # Draw countdown (show whole seconds)
         text = str(math.ceil(remaining)) if remaining > 0 else "0"
-        cv2.putText(display, text, (30, 100),
-                    cv2.FONT_HERSHEY_SIMPLEX, 2.5, (0, 0, 255), 4, cv2.LINE_AA)
-        cv2.imshow("Webcam - Get Ready!", display)
+        cv2.putText(display, text, (20, int(cam_h * 0.18)),
+                    cv2.FONT_HERSHEY_SIMPLEX, font_scale_countdown, (0, 0, 255), thickness + 1, cv2.LINE_AA)
+
+        # Resize display to fill the entire screen
+        display = cv2.resize(display, (screen_w, screen_h))
+        cv2.imshow(window_name, display)
 
         if remaining <= 0:
             # Capture this frame
