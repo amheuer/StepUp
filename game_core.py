@@ -20,6 +20,7 @@ from config import (
 	WINDOW_TITLE,
 	WINDOW_WIDTH,
 	COIN_RADIUS,
+	INTENSITY,
 )
 from entities import Player, Platform
 from platforms import create_initial_platforms, generate_new_platforms
@@ -30,6 +31,13 @@ BG_DIR = (
 	/ "Extraordinary Pixelvania - Free Asset Pack"
 	/ "Sprites"
 	/ "BGs"
+)
+FONT_PATH = (
+	Path(__file__).resolve().parent
+	/ "assets"
+	/ "Extraordinary Pixelvania - Free Asset Pack"
+	/ "Font"
+	/ "Extraordinary Font.ttf"
 )
 SOUNDTRACK_PATH = Path(__file__).resolve().parent / "assets" / "Sounds" / "Jeremy Blake - Powerup!.mp3"
 SFX_DIR = Path(__file__).resolve().parent / "assets" / "brackeys_platformer_assets" / "sounds"
@@ -53,8 +61,8 @@ class Game:
 		self.screen = pygame.display.set_mode((0, 0), pygame.FULLSCREEN)
 		pygame.display.set_caption(WINDOW_TITLE)
 		self.clock = pygame.time.Clock()
-		self.font = pygame.font.SysFont(None, 32)
-		self.ui_font = pygame.font.SysFont(None, UI_FONT_SIZE)
+		self.ui_font = pygame.font.Font(FONT_PATH, UI_FONT_SIZE)
+		self.font = self.ui_font
 		self.game_surface = pygame.Surface((WINDOW_WIDTH, WINDOW_HEIGHT))
 		self.high_score = 0
 		self.next_high_score_sfx = 1000
@@ -81,9 +89,15 @@ class Game:
 		self.score = 0
 		self.height_jumped = 0
 		self.coins_collected = 0
+		self.calories = 0.0
+		self.display_calories = 0.0
 		self.next_high_score_sfx = 1000
 		pygame.mixer.music.play(-1)
 		self.skip_sfx_frames = 2
+
+	def _update_calories(self):
+		"""Return calories per minute based on intensity."""
+		return INTENSITY.value
 
 	def _load_sfx(self):
 		"""Load sound effects by filename."""
@@ -199,6 +213,8 @@ class Game:
 			platform_below.land()  # Start fading this platform
 			if play_sfx and not was_on_platform:
 				self.sfx["tap.wav"].play()
+			if not was_on_platform:
+				self.display_calories = self.calories
 
 		# Handle scrolling
 		if self.player.y < SCROLL_THRESHOLD:
@@ -247,6 +263,11 @@ class Game:
 			pygame.mixer.music.stop()
 			self.game_over = True
 
+		per_min = self._update_calories()
+		self.calories += per_min * (dt / 60.0)
+		if self.player.jumped_this_frame:
+			self.display_calories = self.calories
+
 	def draw_background(self):
 		"""Draw layered background with parallax bubbles."""
 		base = pygame.transform.scale(self.bg_base, (WINDOW_WIDTH, WINDOW_HEIGHT))
@@ -265,12 +286,27 @@ class Game:
 		"""Draw score and game over text."""
 		if self.game_over:
 			game_over_text = self.font.render(
-				"Game Over - Press R to restart",
+				"GAME OVER - PRESS R TO RESTART",
 				True,
 				COLOR_GAME_OVER,
 			)
-			x = (WINDOW_WIDTH - game_over_text.get_width()) // 2
-			y = WINDOW_HEIGHT // 2 - 20
+			game_over_text = pygame.transform.smoothscale(
+				game_over_text,
+				(
+					max(1, game_over_text.get_width() // 2.5),
+					max(1, game_over_text.get_height() // 2.5),
+				),
+			)
+			box_padding = 10
+			box_w = game_over_text.get_width() + box_padding * 2
+			box_h = game_over_text.get_height() + box_padding * 2
+			box_x = (WINDOW_WIDTH - box_w) // 2
+			box_y = WINDOW_HEIGHT // 2 - 20 - box_padding
+			box_rect = pygame.Rect(box_x, box_y, box_w, box_h)
+			pygame.draw.rect(self.game_surface, COLOR_BARS, box_rect)
+			pygame.draw.rect(self.game_surface, (0, 0, 0), box_rect, 2)
+			x = box_x + box_padding
+			y = box_y + box_padding
 			self.game_surface.blit(game_over_text, (x, y))
 
 	def draw(self):
@@ -297,13 +333,18 @@ class Game:
 		self.screen.fill(COLOR_BARS)
 		scaled_surface = pygame.transform.smoothscale(self.game_surface, (scaled_w, scaled_h))
 		self.screen.blit(scaled_surface, (offset_x, offset_y))
+		if offset_x > 0:
+			left_border = pygame.Rect(offset_x - 2, 0, 2, screen_h)
+			right_border = pygame.Rect(offset_x + scaled_w, 0, 2, screen_h)
+			pygame.draw.rect(self.screen, (0, 0, 0), left_border)
+			pygame.draw.rect(self.screen, (0, 0, 0), right_border)
 
 		if offset_x > 0:
 			text_lines = [
-				f"Highscore: {self.high_score}",
-				f"Score: {self.score}",
-				f"Height: {self.height_jumped}",
-				f"Coins: {self.coins_collected}",
+				f"HIGHSCORE: {self.high_score}",
+				f"SCORE: {self.score}",
+				f"HEIGHT: {self.height_jumped}",
+				f"COINS: {self.coins_collected}",
 			]
 			tx = 16
 			ty = 20
@@ -311,6 +352,13 @@ class Game:
 				text_surf = self.ui_font.render(line, True, COLOR_BARS_TEXT)
 				self.screen.blit(text_surf, (tx, ty))
 				ty += text_surf.get_height() + 10
+
+			cal_text = self.ui_font.render(
+				f"CALORIES: {self.display_calories:.1f}", True, COLOR_BARS_TEXT
+			)
+			right_bar_left = offset_x + scaled_w
+			cal_x = right_bar_left + 16
+			self.screen.blit(cal_text, (cal_x, 20))
 
 		pygame.display.flip()
 
