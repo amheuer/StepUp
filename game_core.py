@@ -1187,7 +1187,7 @@ class Game:
 		self.screen.blit(self.menu_pattern_surface, (0, 0))
 
 		step = self.title_font.render("STEP", True, COLOR_BARS_TEXT)
-		up = self.title_font.render("UP!", True, COLOR_BARS_TEXT)
+		up = self.title_font.render("UP!", True, (156, 42, 112))
 		subtitle = self.subtitle_font.render("THE HEALTH  PLATFORMER", True, COLOR_BARS_TEXT)
 
 		title_w = step.get_width() + up.get_width()
