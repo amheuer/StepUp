@@ -268,6 +268,22 @@ class Game:
 			self.pixels_per_foot_sum = self.pixels_per_foot
 			self.pixels_per_foot_count = 1
 
+	def _reset_user_stats(self, user):
+		"""Reset all persistent per-user stats."""
+		user.update(
+			{
+				"highscore": 0,
+				"lifetime_calories": 0.0,
+				"minutes_played": 0.0,
+				"balance_ability": 0.0,
+				"max_jump_height_ft": 0.0,
+				"avg_jump_height_ft": 0.0,
+				"max_shuffle_speed_fps": 0.0,
+				"avg_shuffle_speed_fps": 0.0,
+				"pixels_per_foot": None,
+			}
+		)
+
 	def _reset_balance_tracking(self):
 		self.balance_jump_v_sum = 0.0
 		self.balance_jump_t_sum = 0.0
@@ -812,7 +828,12 @@ class Game:
 					if event.key == pygame.K_RETURN:
 						name = self.username_input.strip().upper()
 						if name:
+							is_new = name not in self.users
 							self._ensure_user(name)
+							if is_new:
+								user = self.users.get(self.current_user)
+								if user is not None:
+									self._reset_user_stats(user)
 							self.username_input = ""
 							self.signin_mode = False
 							self._save_users()
