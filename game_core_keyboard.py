@@ -125,6 +125,7 @@ class Game:
 		self.prev_jump_active = False
 		self.jump_flash_timer = 0.0
 		self.last_jump_triggered = False
+		self.prev_game_over = False
 
 		self.reset()
 		self.running = True
@@ -184,6 +185,8 @@ class Game:
 		self.prev_jump_active = False
 		self.jump_flash_timer = 0.0
 		self.last_jump_triggered = False
+		self.prev_game_over = False
+		self._reset_balance_tracking()
 
 	def _update_calories(self):
 		"""Return calories per minute based on intensity."""
@@ -210,8 +213,69 @@ class Game:
 				"highscore": 0,
 				"lifetime_calories": 0.0,
 				"minutes_played": 0.0,
+				"balance_ability": 0.0,
 			}
 		self.current_user = key
+
+	def _reset_balance_tracking(self):
+		self.balance_jump_v_sum = 0.0
+		self.balance_jump_t_sum = 0.0
+		self.balance_shuffle_v_sum = 0.0
+		self.balance_shuffle_t_sum = 0.0
+		self.balance_moves = 0
+		self.balance_time_no_moves = 0.0
+		self.balance_jump_in_progress = False
+		self.balance_shuffle_in_progress = False
+
+	def _update_balance_tracking(self, dt):
+		if self.in_tutorial:
+			return
+		has_vel = self.cv_state.center_velocity is not None
+		vx = self.cv_state.center_velocity[0] if has_vel else 0.0
+		vy = self.cv_state.center_velocity[1] if has_vel else 0.0
+
+		if self.balance_jump_in_progress:
+			if (not self.cv_state.jump_active) and (not has_vel or abs(vy) < CV_MOVE_DEADZONE):
+				self.balance_jump_in_progress = False
+		else:
+			if self.cv_state.jump_active:
+				self.balance_jump_in_progress = True
+				self.balance_moves += 1
+
+		shuffle_active = has_vel and abs(vx) >= CV_MOVE_DEADZONE
+		if shuffle_active and not self.balance_shuffle_in_progress:
+			self.balance_shuffle_in_progress = True
+			self.balance_moves += 1
+		elif not shuffle_active and self.balance_shuffle_in_progress:
+			self.balance_shuffle_in_progress = False
+
+		if self.balance_jump_in_progress and has_vel:
+			self.balance_jump_v_sum += abs(vy) * dt
+			self.balance_jump_t_sum += dt
+		if self.balance_shuffle_in_progress and has_vel:
+			self.balance_shuffle_v_sum += abs(vx) * dt
+			self.balance_shuffle_t_sum += dt
+		if not self.balance_jump_in_progress and not self.balance_shuffle_in_progress:
+			self.balance_time_no_moves += dt
+
+	def _compute_balance_ability(self):
+		if self.balance_moves <= 0:
+			return 0.0
+		transition_time = self.balance_time_no_moves / self.balance_moves
+		if transition_time <= 0.0:
+			return 0.0
+		vv = 0.0 if self.balance_jump_t_sum <= 0 else (self.balance_jump_v_sum / self.balance_jump_t_sum)
+		vh = 0.0 if self.balance_shuffle_t_sum <= 0 else (self.balance_shuffle_v_sum / self.balance_shuffle_t_sum)
+		return (vh + vv) / transition_time
+
+	def _finalize_balance_ability(self):
+		if not self.current_user:
+			return
+		user = self.users.get(self.current_user)
+		if not user:
+			return
+		user["balance_ability"] = self._compute_balance_ability()
+		self._save_users()
 
 	def _user_sprite_dir(self, username=None):
 		"""Return the per-user sprite directory path."""
@@ -710,6 +774,8 @@ class Game:
 				move_vx = PLAYER_MAX_X_SPEED
 			jump_active = keys[pygame.K_UP] or keys[pygame.K_w] or keys[pygame.K_SPACE]
 
+		self._update_balance_tracking(dt)
+
 		jump_allowed = True
 
 		if self.player.y < prev_y:
@@ -863,6 +929,9 @@ class Game:
 			self.jump_flash_timer = max(0.0, self.jump_flash_timer - dt)
 
 		self.prev_jump_active = jump_active
+		if self.game_over and not self.prev_game_over:
+			self._finalize_balance_ability()
+		self.prev_game_over = self.game_over
 
 	def draw_background(self):
 		"""Draw layered background with parallax bubbles."""
@@ -1284,6 +1353,7 @@ class Game:
 			f"HIGHSCORE: {user.get('highscore', 0)}",
 			f"LIFETIME CALORIES: {user.get('lifetime_calories', 0.0):.2f}",
 			f"MINUTES PLAYED: {user.get('minutes_played', 0.0):.1f}",
+			f"BALANCE ABILITY: {user.get('balance_ability', 0.0):.2f}",
 		]
 		line_surfs = [self.subtitle_font.render(line, True, COLOR_BARS_TEXT) for line in lines]
 		max_w = max(s.get_width() for s in line_surfs)
