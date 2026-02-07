@@ -87,17 +87,22 @@ def run_yolo_sam_pipeline(
         # Extract the person pixels; transparent (black) background
         isolated = cv2.bitwise_and(image, image, mask=binary_mask)
 
+        print(f"[INFO] Pixelating with {grid_size}×{grid_size} grid "
+              f"(cell size ≈ {w // grid_size}×{h // grid_size} px)")
+
         # Pixelate using a grid that divides the image into grid_size cells
         pixelated = np.zeros_like(image)
-        cell_h = max(1, h // grid_size)
-        cell_w = max(1, w // grid_size)
 
-        for row in range(grid_size):
-            for col in range(grid_size):
-                y1 = row * cell_h
-                x1 = col * cell_w
-                y2 = min(y1 + cell_h, h)
-                x2 = min(x1 + cell_w, w)
+        # Compute cell boundaries that fully tile the image (handles uneven division)
+        row_edges = np.linspace(0, h, grid_size + 1, dtype=int)
+        col_edges = np.linspace(0, w, grid_size + 1, dtype=int)
+
+        for r in range(grid_size):
+            for c in range(grid_size):
+                y1, y2 = row_edges[r], row_edges[r + 1]
+                x1, x2 = col_edges[c], col_edges[c + 1]
+                if y1 == y2 or x1 == x2:
+                    continue
 
                 # Only fill if any masked pixel is in this cell
                 cell_mask = binary_mask[y1:y2, x1:x2]
@@ -112,12 +117,12 @@ def run_yolo_sam_pipeline(
 
         # Build an alpha mask: 255 for any grid cell that was filled, 0 elsewhere
         alpha = np.zeros((h, w), dtype=np.uint8)
-        for row in range(grid_size):
-            for col in range(grid_size):
-                y1 = row * cell_h
-                x1 = col * cell_w
-                y2 = min(y1 + cell_h, h)
-                x2 = min(x1 + cell_w, w)
+        for r in range(grid_size):
+            for c in range(grid_size):
+                y1, y2 = row_edges[r], row_edges[r + 1]
+                x1, x2 = col_edges[c], col_edges[c + 1]
+                if y1 == y2 or x1 == x2:
+                    continue
                 if binary_mask[y1:y2, x1:x2].any():
                     alpha[y1:y2, x1:x2] = 255
 
