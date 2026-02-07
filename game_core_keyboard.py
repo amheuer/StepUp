@@ -1338,3 +1338,4 @@ class Game:
 			self.cv.stop()
 		pygame.quit()
 		sys.exit()
+
