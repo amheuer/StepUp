@@ -1,5 +1,6 @@
 """Game entities for StepUp."""
 
+import math
 import random
 import pygame
 
@@ -9,10 +10,14 @@ from config import (
 	COLOR_PLATFORM_FRAGILE,
 	FRAGILE_PLATFORM_FADE_DURATION,
 	GRAVITY,
+	JUMP_COOLDOWN,
+	JUMP_REARM_TIME,
 	JUMP_STRENGTH,
 	MOVING_PLATFORM_SPEED_MAX,
 	MOVING_PLATFORM_SPEED_MIN,
 	PLATFORM_FADE_DURATION,
+	PLAYER_MAX_X_SPEED,
+	PLAYER_MAX_SPEED,
 	PLAYER_MOVE_SPEED,
 	PLAYER_RADIUS,
 	WINDOW_WIDTH,
@@ -46,6 +51,9 @@ class Player:
 		self.prev_up_pressed = False  # Track previous frame's UP key state
 		self.on_platform = False  # Track if player is on a platform this frame
 		self.jumped_this_frame = False
+		self.jump_cooldown = 0.0
+		self.ignore_platform_timer = 0.0
+		self.time_since_jump = None
 
 	@property
 	def rect(self):
@@ -57,22 +65,36 @@ class Player:
 			self.radius * 2,
 		)
 
-	def update(self, dt, move_dir, jump_pressed):
+	def update(self, dt, move_vx, jump_pressed, jump_velocity=None):
 		"""Update player position and velocity."""
 		self.jumped_this_frame = False
-		# Horizontal movement based on input
-		ax = 0
-		if move_dir < 0:
-			ax -= 1
-		elif move_dir > 0:
-			ax += 1
-		self.vx = ax * PLAYER_MOVE_SPEED
+		if self.jump_cooldown > 0:
+			self.jump_cooldown = max(0.0, self.jump_cooldown - dt)
+		if self.time_since_jump is not None:
+			self.time_since_jump += dt
 
-		# Jump on UP key press (not held)
-		if jump_pressed and not self.prev_up_pressed and self.can_jump:
-			self.jump()
+		# Horizontal movement based on input only while grounded.
+		if self.on_platform:
+			if move_vx is None:
+				self.vx = 0
+			else:
+				self.vx = max(-PLAYER_MAX_X_SPEED, min(PLAYER_MAX_X_SPEED, move_vx))
+
+		# Jump on UP key press (not held), respecting cooldown and upward lock.
+		if (
+			jump_pressed
+			and not self.prev_up_pressed
+			and self.can_jump
+			and self.jump_cooldown <= 0.0
+			and self.vy >= 0
+			and (self.time_since_jump is None or self.time_since_jump >= JUMP_REARM_TIME)
+		):
+			self.jump(jump_velocity)
 			self.can_jump = False
 			self.jumped_this_frame = True
+			self.jump_cooldown = JUMP_COOLDOWN
+			self.on_platform = False
+			self.time_since_jump = 0.0
 		self.prev_up_pressed = jump_pressed
 
 		# Update position
@@ -90,9 +112,30 @@ class Player:
 		elif self.x > WINDOW_WIDTH + self.radius:
 			self.x = -self.radius
 
-	def jump(self, strength=JUMP_STRENGTH):
+	def jump(self, velocity=None, strength=JUMP_STRENGTH):
 		"""Apply a jump impulse."""
-		self.vy = -strength
+		if velocity is None:
+			self.vx = 0
+			self.vy = -strength
+			return
+		vx, vy = velocity
+		if vx is None or vy is None:
+			self.vx = 0
+			self.vy = -strength
+			return
+		speed = math.hypot(vx, vy)
+		if speed <= 1e-6:
+			self.vx = 0
+			self.vy = -strength
+			return
+		nx = vx / speed
+		ny = vy / speed
+		raw_vx = nx * strength
+		clamped_vx = max(-PLAYER_MAX_X_SPEED, min(PLAYER_MAX_X_SPEED, raw_vx))
+		remaining = max(0.0, (strength * strength) - (clamped_vx * clamped_vx))
+		vy_mag = math.sqrt(remaining)
+		self.vx = clamped_vx
+		self.vy = -vy_mag if ny < 0 else vy_mag
 
 	def draw(self, surface):
 		"""Draw the player as a circle or sprite."""
