@@ -154,6 +154,7 @@ class Platform:
 		# Lifetime tracking
 		self.landed_time = None  # When player landed on this platform
 		self.is_active = True  # Platform is still visible/active
+		self.crack_seed = random.randint(0, 1_000_000)
 
 	@property
 	def rect(self):
@@ -203,6 +204,16 @@ class Platform:
 		if alpha <= 0:
 			return
 
+		crack_progress = 1 - (alpha / 255)
+		crack_alpha = max(0, int(alpha * 0.7))
+		crack_lines = 0
+		if crack_progress > 0.15:
+			crack_lines = 2
+		if crack_progress > 0.4:
+			crack_lines = 4
+		if crack_progress > 0.7:
+			crack_lines = 6
+
 		if Platform.tileset_loaded:
 			left, mid, right = Platform._get_scaled_tiles(self.kind, self.h)
 			left = left.copy()
@@ -215,19 +226,31 @@ class Platform:
 			tile_w = left.get_width()
 			draw_x = int(self.x)
 			draw_y = int(self.y)
-			x = draw_x
-			right_x = draw_x + self.w - tile_w
-			if self.w <= tile_w * 2:
-				surface.blit(left, (x, draw_y))
-				surface.blit(right, (right_x, draw_y))
-				return
 
-			surface.blit(left, (x, draw_y))
-			x += tile_w
-			while x <= right_x - tile_w:
-				surface.blit(mid, (x, draw_y))
+			platform_surf = pygame.Surface((self.w, self.h), pygame.SRCALPHA)
+			x = 0
+			right_x = self.w - tile_w
+			if self.w <= tile_w * 2:
+				platform_surf.blit(left, (x, 0))
+				platform_surf.blit(right, (right_x, 0))
+			else:
+				platform_surf.blit(left, (x, 0))
 				x += tile_w
-			surface.blit(right, (right_x, draw_y))
+				while x <= right_x - tile_w:
+					platform_surf.blit(mid, (x, 0))
+					x += tile_w
+				platform_surf.blit(right, (right_x, 0))
+
+			surface.blit(platform_surf, (draw_x, draw_y))
+			if crack_lines:
+				cracks = self._make_cracks(crack_lines, crack_alpha)
+				mask = pygame.mask.from_surface(platform_surf)
+				mask_surf = mask.to_surface(
+					setcolor=(255, 255, 255, 255),
+					unsetcolor=(0, 0, 0, 0),
+				)
+				cracks.blit(mask_surf, (0, 0), special_flags=pygame.BLEND_RGBA_MULT)
+				surface.blit(cracks, (draw_x, draw_y))
 			return
 
 		# Fallback to solid rects if tiles aren't loaded.
@@ -239,4 +262,35 @@ class Platform:
 			(0, 0, self.w, self.h),
 			border_radius=4,
 		)
-		surface.blit(platform_surf, (int(self.x), int(self.y)))
+		draw_x = int(self.x)
+		draw_y = int(self.y)
+		surface.blit(platform_surf, (draw_x, draw_y))
+		if crack_lines:
+			cracks = self._make_cracks(crack_lines, crack_alpha)
+			surface.blit(cracks, (draw_x, draw_y))
+
+	def _make_cracks(self, count, alpha):
+		"""Create a cracks overlay surface based on fade progress."""
+		if count <= 0:
+			return pygame.Surface((self.w, self.h), pygame.SRCALPHA)
+		rng = random.Random(self.crack_seed)
+		overlay = pygame.Surface((self.w, self.h), pygame.SRCALPHA)
+		color = (40, 35, 35, alpha)
+		segments = max(3, self.w // 8)
+		min_x = 2
+		max_x = max(2, self.w - 3)
+		min_y = 2
+		max_y = max(2, self.h - 3)
+		for i in range(count):
+			y = rng.randint(min_y, max_y)
+			points = [(min_x, y)]
+			for s in range(segments):
+				x = min_x + int((s + 1) * (max_x - min_x) / segments)
+				y += rng.randint(-3, 3)
+				if y < min_y:
+					y = min_y
+				elif y > max_y:
+					y = max_y
+				points.append((x, y))
+			pygame.draw.lines(overlay, color, False, points, 1)
+		return overlay
