@@ -35,6 +35,7 @@ from config import (
 	PLAYER_MAX_SPEED,
 	PLAYER_HEIGHT_METERS,
 	PLATFORM_IGNORE_TIME,
+	PLATFORM_BASE_WIDTH,
 	PLATFORM_HEIGHT,
 	JUMP_REARM_TIME,
 )
@@ -427,15 +428,17 @@ class Game:
 		self.platforms = []
 
 		# 1.  Solid ground — a wide platform that never fades
+		#     Width must be a multiple of tile_w which equals the platform
+		#     height (tiles are scaled to height×height), so multiple of 30.
 		ground = Platform(0, WINDOW_HEIGHT - 30,
-						  width=WINDOW_WIDTH, height=30, kind="normal")
+						  width=30 * 14, height=30, kind="normal")
 		ground.fade_duration = 1e9          # effectively never fades
 		self.platforms.append(ground)
 
 		# 2.  Right-side step
-		step_w = 90
+		step_w = PLATFORM_BASE_WIDTH
 		right_plat = Platform(
-			WINDOW_WIDTH - step_w - 30, WINDOW_HEIGHT - 160,
+			WINDOW_WIDTH - step_w - 60, WINDOW_HEIGHT - 160,
 			width=step_w, height=PLATFORM_HEIGHT, kind="normal",
 		)
 		right_plat.fade_duration = 1e9
@@ -443,17 +446,17 @@ class Game:
 
 		# 3.  Left-side step (higher)
 		left_plat = Platform(
-			30, WINDOW_HEIGHT - 300,
+			60, WINDOW_HEIGHT - 300,
 			width=step_w, height=PLATFORM_HEIGHT, kind="normal",
 		)
 		left_plat.fade_duration = 1e9
 		self.platforms.append(left_plat)
 
-		# 4.  Portal at the top centre
+		# 4.  Portal — right of centre, near the top
 		portal_w, portal_h = 50, 60
 		self.portal_rect = pygame.Rect(
-			(WINDOW_WIDTH - portal_w) // 2,
-			30,
+			WINDOW_WIDTH - portal_w - 60,
+			80,
 			portal_w,
 			portal_h,
 		)
@@ -980,8 +983,13 @@ class Game:
 				hint = self.subtitle_font.render(
 					"JUMP TO THE PORTAL!", True, COLOR_TEXT
 				)
+				hint = pygame.transform.smoothscale(
+					hint,
+					(max(1, hint.get_width() // 3),
+					 max(1, hint.get_height() // 3)),
+				)
 				hint_x = (WINDOW_WIDTH - hint.get_width()) // 2
-				self.game_surface.blit(hint, (hint_x, WINDOW_HEIGHT - 60))
+				self.game_surface.blit(hint, (hint_x, 10))
 
 			self.player.draw(self.game_surface)
 
