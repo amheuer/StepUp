@@ -233,6 +233,10 @@ class Platform:
 		self.crack_alpha_max = 0
 		self.just_broke = False
 
+		# Respawn support (used by tutorial platforms)
+		self.respawn_delay = None   # seconds to wait before respawning (None = no respawn)
+		self.respawn_timer = 0.0    # counts up while inactive
+
 	@property
 	def rect(self):
 		"""Bounding rectangle for collision detection."""
@@ -242,6 +246,16 @@ class Platform:
 		"""Called when player lands on this platform. Only starts fading once."""
 		if self.landed_time is None:
 			self.landed_time = 0  # Start fading timer only on first landing
+
+	def respawn(self):
+		"""Reset the platform so it reappears as brand-new."""
+		self.landed_time = None
+		self.is_active = True
+		self.crack_seed = random.randint(0, 1_000_000)
+		self.crack_lines_max = 0
+		self.crack_alpha_max = 0
+		self.just_broke = False
+		self.respawn_timer = 0.0
 
 	def update(self, dt):
 		"""Update platform position if moving, and fade if landed on."""
@@ -265,6 +279,12 @@ class Platform:
 				if self.is_active:
 					self.just_broke = True
 				self.is_active = False
+
+		# Respawn logic: count up while inactive, then reset
+		if not self.is_active and self.respawn_delay is not None:
+			self.respawn_timer += dt
+			if self.respawn_timer >= self.respawn_delay:
+				self.respawn()
 
 	def get_alpha(self):
 		"""Return the alpha value (0-255) for drawing."""
