@@ -32,6 +32,7 @@ class Player:
 		self.can_jump = False  # Can jump when on a platform
 		self.prev_up_pressed = False  # Track previous frame's UP key state
 		self.on_platform = False  # Track if player is on a platform this frame
+		self.jumped_this_frame = False
 
 	@property
 	def rect(self):
@@ -45,6 +46,7 @@ class Player:
 
 	def update(self, dt, keys):
 		"""Update player position and velocity."""
+		self.jumped_this_frame = False
 		# Horizontal movement based on input
 		ax = 0
 		if keys[pygame.K_LEFT] or keys[pygame.K_a]:
@@ -58,6 +60,7 @@ class Player:
 		if up_pressed and not self.prev_up_pressed and self.can_jump:
 			self.jump()
 			self.can_jump = False
+			self.jumped_this_frame = True
 		self.prev_up_pressed = up_pressed
 
 		# Update position
@@ -157,6 +160,7 @@ class Platform:
 		self.crack_seed = random.randint(0, 1_000_000)
 		self.crack_lines_max = 0
 		self.crack_alpha_max = 0
+		self.just_broke = False
 
 	@property
 	def rect(self):
@@ -170,6 +174,7 @@ class Platform:
 
 	def update(self, dt):
 		"""Update platform position if moving, and fade if landed on."""
+		self.just_broke = False
 		self.vx = 0
 		if self.moving:
 			self.vx = self.dir * self.speed
@@ -186,6 +191,8 @@ class Platform:
 		if self.landed_time is not None:
 			self.landed_time += dt
 			if self.landed_time >= self.fade_duration:
+				if self.is_active:
+					self.just_broke = True
 				self.is_active = False
 
 	def get_alpha(self):

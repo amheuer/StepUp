@@ -16,16 +16,34 @@ from config import (
 class Coin:
 	"""Represents a collectable coin."""
 
+	frames = []
+	frame_time_ms = 80
+	frames_loaded = False
+
+	@classmethod
+	def load_frames(cls, frames, frame_time_ms=80):
+		cls.frames = frames
+		cls.frame_time_ms = frame_time_ms
+		cls.frames_loaded = len(frames) > 0
+
 	def __init__(self, x, y, radius=COIN_RADIUS):
 		self.x = x
 		self.y = y
 		self.radius = radius
 		self.color = COIN_COLOR
 		self.collected = False
+		self.anim_offset = random.randint(0, 1000)
 
 	def draw(self, surface):
-		"""Draw the coin as a simple circle."""
+		"""Draw the coin as a simple circle or animated sprite."""
 		if self.collected:
+			return
+		if Coin.frames_loaded:
+			t = pygame.time.get_ticks() + self.anim_offset
+			index = (t // Coin.frame_time_ms) % len(Coin.frames)
+			frame = Coin.frames[index]
+			rect = frame.get_rect(center=(int(self.x), int(self.y)))
+			surface.blit(frame, rect)
 			return
 		pygame.draw.circle(surface, self.color, (int(self.x), int(self.y)), self.radius)
 
