@@ -68,6 +68,12 @@ TILESET_PATH = (
 	/ "Tileset"
 	/ "Tileset.png"
 )
+MENU_BG_PATH = (
+	Path(__file__).resolve().parent
+	/ "assets"
+	/ "Background"
+	/ "MenuBackground.png"
+)
 USERS_PATH = Path(__file__).resolve().parent / "users.json"
 PLAYER_DIR = Path(__file__).resolve().parent / "assets" / "player_images"
 
@@ -107,6 +113,9 @@ class Game:
 		self.bar_pattern_size = (0, 0)
 		self.menu_pattern_surface = None
 		self.menu_pattern_size = (0, 0)
+		self.menu_bg_surface = self._load_menu_background()
+		self.menu_bg_scaled = None
+		self.menu_bg_size = (0, 0)
 		self.cv = None
 		self.cv_state = CVState(
 			zone=None,
@@ -161,6 +170,12 @@ class Game:
 		except Exception as exc:
 			self.cv = None
 			print(f"[CV] Failed to initialize CV controller: {exc}")
+
+	def _load_menu_background(self):
+		if not MENU_BG_PATH.exists():
+			print(f"[Menu] Missing background image: {MENU_BG_PATH}")
+			return None
+		return pygame.image.load(MENU_BG_PATH).convert_alpha()
 
 	def reset(self):
 		"""Reset game state for a new game."""
@@ -1193,6 +1208,14 @@ class Game:
 			self.menu_pattern_surface = self._build_menu_pattern(screen_w, screen_h)
 			self.menu_pattern_size = (screen_w, screen_h)
 		self.screen.blit(self.menu_pattern_surface, (0, 0))
+		if self.menu_bg_surface:
+			if self.menu_bg_size != (screen_w, screen_h):
+				self.menu_bg_scaled = pygame.transform.smoothscale(
+					self.menu_bg_surface,
+					(screen_w, screen_h),
+				)
+				self.menu_bg_size = (screen_w, screen_h)
+			self.screen.blit(self.menu_bg_scaled, (0, 0))
 
 		step = self.title_font.render("STEP", True, COLOR_BARS_TEXT)
 		up = self.title_font.render("UP!", True, (156, 42, 112))
