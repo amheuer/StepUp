@@ -49,15 +49,23 @@ def run_yolo_sam_pipeline(
         return
 
     # Extract bounding boxes as xyxy numpy array
-    bboxes = boxes.xyxy.cpu().numpy()            # (N, 4) — x1, y1, x2, y2
-    confs = boxes.conf.cpu().numpy()             # (N,)
-    cls_ids = boxes.cls.cpu().numpy().astype(int) # (N,)
-    class_names = det_result.names               # {id: name, ...}
+    all_bboxes = boxes.xyxy.cpu().numpy()            # (N, 4) — x1, y1, x2, y2
+    all_confs = boxes.conf.cpu().numpy()             # (N,)
+    all_cls_ids = boxes.cls.cpu().numpy().astype(int) # (N,)
+    class_names = det_result.names                   # {id: name, ...}
 
-    print(f"[INFO] Detected {len(bboxes)} object(s):")
-    for i, (box, conf, cls_id) in enumerate(zip(bboxes, confs, cls_ids)):
-        print(f"  [{i}] {class_names[cls_id]:>12s}  conf={conf:.2f}  "
-              f"bbox=({box[0]:.0f}, {box[1]:.0f}, {box[2]:.0f}, {box[3]:.0f})")
+    # Pick the closest person (largest bounding box area)
+    areas = (all_bboxes[:, 2] - all_bboxes[:, 0]) * (all_bboxes[:, 3] - all_bboxes[:, 1])
+    closest_idx = int(np.argmax(areas))
+
+    bboxes = all_bboxes[closest_idx:closest_idx + 1]   # keep (1, 4) shape
+    confs = all_confs[closest_idx:closest_idx + 1]
+    cls_ids = all_cls_ids[closest_idx:closest_idx + 1]
+
+    print(f"[INFO] Detected {len(all_bboxes)} person(s), keeping closest (largest bbox):")
+    box, conf, cls_id = bboxes[0], confs[0], cls_ids[0]
+    print(f"  {class_names[cls_id]}  conf={conf:.2f}  "
+          f"bbox=({box[0]:.0f}, {box[1]:.0f}, {box[2]:.0f}, {box[3]:.0f})")
 
     # ── 3. Run SAM segmentation with YOLO bounding boxes ───────────
     print("[INFO] Running SAM segmentation on detected bounding boxes...")
