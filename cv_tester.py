@@ -43,9 +43,11 @@ except Exception as e:
 CONFIDENCE_THRESH = 0.35   # detection confidence threshold (0.0 - 1.0)
 MAX_DETECTIONS = 1         # maximum number of person detections to process (you asked for 1)
 IOU_NMS = 0.45             # iou/nms threshold if you want to use in model.predict (left as var)
-WEBCAM_INDEX = 0           # default webcam index
+USE_USB_WEBCAM = True      # True = use USB webcam index, False = use built-in/default camera
+WEBCAM_INDEX = 1           # USB webcam index (set to your USB device)
 FRAME_WIDTH = None         # if None, use webcam default
 FRAME_HEIGHT = None
+TARGET_FPS = 24            # cap processing rate
 DETECTION_MODEL_PATH = "yolo11n.pt"        # will download if not present via Ultralytics
 POSE_MODEL_PATH = "yolo11n-pose.pt"        # will download if not present via Ultralytics
 SHOW_FPS = True
@@ -53,14 +55,24 @@ PRINT_JSON_LOGS = True     # prints per-frame JSON to stdout
 FOCUS_ONE_PERSON = True    # true = only process the top person detection
 # -----------------------
 
-# Skeleton connectivity for COCO-like keypoints (if pose model uses COCO format).
-# You might need to adjust ordering if the pose model uses a different keypoint ordering.
+# Keypoint indices (COCO-style ordering from user)
+# 0 Nose, 1 Left Eye, 2 Right Eye, 3 Left Ear, 4 Right Ear,
+# 5 Left Shoulder, 6 Right Shoulder, 7 Left Elbow, 8 Right Elbow,
+# 9 Left Wrist, 10 Right Wrist, 11 Left Hip, 12 Right Hip,
+# 13 Left Knee, 14 Right Knee, 15 Left Ankle, 16 Right Ankle
+FACE_INDICES = {0, 1, 2, 3, 4}
+BODY_INDICES = set(range(17)) - FACE_INDICES
+
+# Skeleton connectivity for body (no face connections).
 SKELETON = [
-    (0, 1), (0, 2), (1, 3), (2, 4),         # head/arms (example)
-    (5, 6), (5, 7), (7, 9), (6, 8), (8, 10) # torso/legs (example)
+    (5, 6),          # shoulders
+    (5, 7), (7, 9),  # left arm
+    (6, 8), (8, 10), # right arm
+    (5, 11), (6, 12),# shoulders to hips
+    (11, 12),        # hips
+    (11, 13), (13, 15), # left leg
+    (12, 14), (14, 16)  # right leg
 ]
-# The skeleton above is a placeholder. Ultralytics pose model typically returns keypoints
-# in a COCO-like ordering — if lines look wrong, adapt pairs accordingly.
 
 # -----------------------
 # Logging setup
@@ -114,8 +126,8 @@ def draw_bbox_and_label(img, box, label):
 def draw_keypoints_and_skeleton(img, keypoints, offset=(0,0)):
     # keypoints: list of (x, y, conf) in image coords
     ox, oy = offset
-    for (x, y, c) in keypoints:
-        if c <= 0:
+    for idx, (x, y, c) in enumerate(keypoints):
+        if c <= 0 or idx in FACE_INDICES:
             continue
         cx, cy = int(round(x + ox)), int(round(y + oy))
         cv2.circle(img, (cx, cy), 3, (0, 255, 255), -1)
@@ -129,6 +141,29 @@ def draw_keypoints_and_skeleton(img, keypoints, offset=(0,0)):
                 p1 = (int(round(xi + ox)), int(round(yi + oy)))
                 p2 = (int(round(xj + ox)), int(round(yj + oy)))
                 cv2.line(img, p1, p2, (255, 0, 0), 2)
+
+def draw_zones_overlay(frame, left_pct=0.30, center_pct=0.40, alpha=0.20):
+    h, w = frame.shape[:2]
+    left_w = int(round(w * left_pct))
+    center_w = int(round(w * center_pct))
+    right_start = left_w + center_w
+
+    overlay = frame.copy()
+    # left and right zones (green)
+    cv2.rectangle(overlay, (0, 0), (left_w, h), (0, 255, 0), -1)
+    cv2.rectangle(overlay, (right_start, 0), (w, h), (0, 255, 0), -1)
+    # center zone (red)
+    cv2.rectangle(overlay, (left_w, 0), (right_start, h), (0, 0, 255), -1)
+
+    cv2.addWeighted(overlay, alpha, frame, 1 - alpha, 0, frame)
+    return left_w, right_start
+
+def classify_zone(x_center, left_edge, right_edge):
+    if x_center < left_edge:
+        return "LEFT"
+    if x_center > right_edge:
+        return "RIGHT"
+    return "CENTER"
 
 def run():
     device = choose_device_prefer_cuda()
@@ -158,19 +193,30 @@ def run():
 
 
     # Open webcam
-    cap = cv2.VideoCapture(WEBCAM_INDEX, cv2.CAP_DSHOW if sys.platform.startswith("win") else cv2.CAP_ANY)
+    cam_index = WEBCAM_INDEX if USE_USB_WEBCAM else 0
+    cap = cv2.VideoCapture(cam_index, cv2.CAP_DSHOW if sys.platform.startswith("win") else cv2.CAP_ANY)
     if not cap.isOpened():
-        logger.error("Cannot open webcam index %s. Exiting.", WEBCAM_INDEX)
+        logger.error("Cannot open webcam index %s. Exiting.", cam_index)
         sys.exit(1)
 
     # Optionally set frame size
     if FRAME_WIDTH and FRAME_HEIGHT:
         cap.set(cv2.CAP_PROP_FRAME_WIDTH, FRAME_WIDTH)
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, FRAME_HEIGHT)
+    if TARGET_FPS:
+        cap.set(cv2.CAP_PROP_FPS, TARGET_FPS)
 
     frame_idx = 0
     t_prev = time.time()
     fps = 0.0
+    last_frame_time = 0.0
+    # Jump detection state
+    jump_up_count = 0
+    jump_display_frames = 0
+    prev_leg_y = None
+    JUMP_FRAMES_UP = 3
+    JUMP_MIN_DELTA_PX = 3
+    JUMP_HOLD_FRAMES = 20
     logger.info("Starting webcam loop. Press 'q' to quit.")
     try:
         while True:
@@ -178,9 +224,15 @@ def run():
             if not ret:
                 logger.error("Failed to read frame from webcam. Exiting.")
                 break
+            now = time.time()
+            if last_frame_time and (now - last_frame_time) < (1.0 / TARGET_FPS):
+                continue
+            last_frame_time = now
+            frame = cv2.flip(frame, 1)
 
             frame_idx += 1
             h, w = frame.shape[:2]
+            left_edge, right_edge = draw_zones_overlay(frame, left_pct=0.40, center_pct=0.25, alpha=0.20)
 
             # Run detector on the whole frame. Set save=False / verbose=False in predict if needed.
             # We use model.predict to allow passing conf and iou args (if API supports).
@@ -268,6 +320,9 @@ def run():
             # If empty, nothing to do this frame
             detection_logs: List[DetectionLog] = []
             if len(person_boxes) == 0:
+                # update jump display decay even if no person
+                if jump_display_frames > 0:
+                    jump_display_frames -= 1
                 # draw FPS only and continue
                 # compute FPS
                 t_now = time.time()
@@ -276,6 +331,8 @@ def run():
                 t_prev = t_now
                 if SHOW_FPS:
                     cv2.putText(frame, f"FPS: {fps:.1f}", (10, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0,255,255), 2)
+                cv2.putText(frame, "ZONE: N/A", (10, 45), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255,255,255), 2)
+                cv2.putText(frame, f"JUMPING: {'YES' if jump_display_frames > 0 else 'NO'}", (10, 70), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255,255,255), 2)
                 cv2.imshow("YOLO11n Person+Pose", frame)
                 key = cv2.waitKey(1) & 0xFF
                 if key == ord("q"):
@@ -290,10 +347,13 @@ def run():
             else:
                 person_order = person_order[:MAX_DETECTIONS]
 
+            zone = "N/A"
             for p_i in person_order:
                 box = person_boxes[p_i]  # [x1,y1,x2,y2]
                 conf = float(person_scores[p_i]) if len(person_scores) > p_i else 0.0
                 x1, y1, x2, y2 = [int(round(x)) for x in box]
+                bbox_center_x = int(round((x1 + x2) / 2))
+                zone = classify_zone(bbox_center_x, left_edge, right_edge)
                 # crop ROI
                 crop = crop_with_padding(frame, (x1, y1, x2, y2))
                 keypoints_out = []
@@ -375,6 +435,27 @@ def run():
                 draw_bbox_and_label(frame, (x1, y1, x2, y2), f"person {conf:.2f}")
                 draw_keypoints_and_skeleton(frame, keypoints_out, offset=(0,0))
 
+                # Jump detection using knees and hips (positive change in height = y decreases)
+                leg_indices = [11, 12, 13, 14]
+                leg_points = []
+                for idx in leg_indices:
+                    if idx < len(keypoints_out):
+                        xk, yk, kc = keypoints_out[idx]
+                        if kc > 0:
+                            leg_points.append(yk)
+                if leg_points:
+                    curr_leg_y = float(np.mean(leg_points))
+                    if prev_leg_y is not None and (prev_leg_y - curr_leg_y) >= JUMP_MIN_DELTA_PX:
+                        jump_up_count += 1
+                    else:
+                        jump_up_count = 0
+                    prev_leg_y = curr_leg_y
+                    if jump_up_count >= JUMP_FRAMES_UP:
+                        jump_display_frames = JUMP_HOLD_FRAMES
+                        jump_up_count = 0
+                else:
+                    jump_up_count = 0
+
                 # Build detection log entry
                 log_entry = DetectionLog(
                     frame_idx=frame_idx,
@@ -393,6 +474,10 @@ def run():
             t_prev = t_now
             if SHOW_FPS:
                 cv2.putText(frame, f"FPS: {fps:.1f}", (10, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0,255,255), 2)
+            cv2.putText(frame, f"ZONE: {zone}", (10, 45), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255,255,255), 2)
+            if jump_display_frames > 0:
+                jump_display_frames -= 1
+            cv2.putText(frame, f"JUMPING: {'YES' if jump_display_frames > 0 else 'NO'}", (10, 70), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255,255,255), 2)
 
             # Show frame
             cv2.imshow("YOLO11n Person+Pose", frame)
