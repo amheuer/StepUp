@@ -985,9 +985,9 @@ class Game:
 
 			self.player.draw(self.game_surface)
 
-			# Draw UI
-			self.draw_ui()
+			# Draw countdown behind UI overlays
 			self._draw_countdown()
+			self.draw_ui()
 
 			scale = min(screen_w / WINDOW_WIDTH, screen_h / WINDOW_HEIGHT)
 			scaled_w = int(WINDOW_WIDTH * scale)
@@ -1138,7 +1138,7 @@ class Game:
 			return
 		value = max(1, int(math.ceil(self.countdown_remaining)))
 		text = self.title_font.render(str(value), True, COLOR_BARS_TEXT)
-		scale = 2.5
+		scale = 1
 		text = pygame.transform.smoothscale(
 			text,
 			(
