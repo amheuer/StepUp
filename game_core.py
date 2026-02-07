@@ -157,11 +157,13 @@ class Game:
 		self.render_offset = (0, 0)
 		self.hover_menu_index = None
 		self.hover_pause_index = None
+		self.hover_game_over = False
 		self.signin_mode = False
 		self.username_input = ""
 		self.current_user = None
 		self.users = self._load_users()
 		self.user_save_timer = 0.0
+		self.game_over_rect = None
 		self._init_cv()
 
 	def _init_cv(self):
@@ -611,6 +613,14 @@ class Game:
 								self.signin_mode = True
 							break
 					continue
+				if self.game_over and not self.paused and not self.in_health and not self.in_menu:
+					game_pos = self._screen_to_game(pos)
+					if game_pos and self.game_over_rect:
+						gx, gy = game_pos
+						if self.game_over_rect.collidepoint(gx, gy):
+							self.reset()
+							self.game_over = False
+					continue
 				if self.paused:
 					game_pos = self._screen_to_game(pos)
 					if not game_pos:
@@ -681,7 +691,7 @@ class Game:
 					continue
 				if event.key == pygame.K_ESCAPE:
 					self.paused = not self.paused
-				elif self.game_over and event.key == pygame.K_r:
+				elif self.game_over and event.key in (pygame.K_r, pygame.K_RETURN, pygame.K_SPACE):
 					self.reset()
 					self.game_over = False
 				elif self.paused:
@@ -952,12 +962,12 @@ class Game:
 
 	def draw_ui(self):
 		"""Draw score and game over text."""
+		self.game_over_rect = None
 		if self.game_over:
-			game_over_text = self.font.render(
-				"GAME OVER - PRESS R TO RESTART",
-				True,
-				COLOR_GAME_OVER,
-			)
+			selected = self.hover_game_over or True
+			prefix = "> " if selected else "  "
+			label = f"GAME OVER - {prefix}RESTART"
+			game_over_text = self.font.render(label, True, COLOR_GAME_OVER)
 			game_over_text = pygame.transform.smoothscale(
 				game_over_text,
 				(
@@ -976,6 +986,7 @@ class Game:
 			x = box_x + box_padding
 			y = box_y + box_padding
 			self.game_surface.blit(game_over_text, (x, y))
+			self.game_over_rect = box_rect
 		if self.paused:
 			title = self.font.render("SETTINGS", True, COLOR_GAME_OVER)
 			title = pygame.transform.smoothscale(
@@ -1247,6 +1258,7 @@ class Game:
 		hover = False
 		self.hover_menu_index = None
 		self.hover_pause_index = None
+		self.hover_game_over = False
 		mx, my = pygame.mouse.get_pos()
 		if self.in_menu:
 			for i, key in enumerate(self.menu_options):
@@ -1255,6 +1267,13 @@ class Game:
 					hover = True
 					self.hover_menu_index = i
 					break
+		elif self.game_over and not self.paused and not self.in_health:
+			game_pos = self._screen_to_game((mx, my))
+			if game_pos and self.game_over_rect:
+				gx, gy = game_pos
+				if self.game_over_rect.collidepoint(gx, gy):
+					hover = True
+					self.hover_game_over = True
 		elif self.paused:
 			game_pos = self._screen_to_game((mx, my))
 			if game_pos:
