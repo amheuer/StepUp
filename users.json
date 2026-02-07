@@ -58,5 +58,20 @@
     "highscore": 0,
     "lifetime_calories": 0.0,
     "minutes_played": 0.0
+  },
+  "JW": {
+    "highscore": 0,
+    "lifetime_calories": 0.0,
+    "minutes_played": 0.0
+  },
+  "JRW": {
+    "highscore": 0,
+    "lifetime_calories": 0.0,
+    "minutes_played": 0.0
+  },
+  "JLSSDLSKF": {
+    "highscore": 200,
+    "lifetime_calories": 4.005466666666826,
+    "minutes_played": 0.5006833333333532
   }
 }
