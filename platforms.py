@@ -21,10 +21,10 @@ def create_initial_platforms():
 	# Base platform at the bottom
 	platforms.append(
 		Platform(
-			WINDOW_WIDTH // 2 - 40,
+			WINDOW_WIDTH // 2 - PLATFORM_BASE_WIDTH // 2,
 			WINDOW_HEIGHT - 40,
-			width=80,
-			height=14,
+			width=PLATFORM_BASE_WIDTH,
+			height=PLATFORM_HEIGHT,
 		)
 	)
 
@@ -43,7 +43,7 @@ def create_initial_platforms():
 			Platform(
 				x,
 				y,
-				width=random.randint(50, 80),
+				width=PLATFORM_BASE_WIDTH,
 				height=PLATFORM_HEIGHT,
 				kind=kind,
 			)
@@ -74,7 +74,7 @@ def generate_new_platforms(platforms):
 		new_platform = Platform(
 			new_x,
 			new_y,
-			width=random.randint(50, 90),
+			width=PLATFORM_BASE_WIDTH,
 			height=PLATFORM_HEIGHT,
 			kind=kind,
 		)
