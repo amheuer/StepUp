@@ -276,5 +276,27 @@
     "max_shuffle_speed_fps": 1.0994636702701865,
     "avg_shuffle_speed_fps": 0.811955330050068,
     "pixels_per_foot": 44.16510190651603
+  },
+  "CHAD": {
+    "highscore": 339,
+    "lifetime_calories": 19.720133333332793,
+    "minutes_played": 2.465016666666599,
+    "balance_ability": 700.8635006738623,
+    "max_jump_height_ft": 2.5691031024748376,
+    "avg_jump_height_ft": 1.2846982691877304,
+    "max_shuffle_speed_fps": 53.26528126249435,
+    "avg_shuffle_speed_fps": 18.742412192290463,
+    "pixels_per_foot": 2.386266988541366
+  },
+  "JEFF": {
+    "highscore": 13,
+    "lifetime_calories": 10.102266666666235,
+    "minutes_played": 1.2627833333332794,
+    "balance_ability": 27.577987517908266,
+    "max_jump_height_ft": 1.8209315094483658,
+    "avg_jump_height_ft": 1.8209315094483658,
+    "max_shuffle_speed_fps": 0.0,
+    "avg_shuffle_speed_fps": 0.0,
+    "pixels_per_foot": 10.521176214913355
   }
 }

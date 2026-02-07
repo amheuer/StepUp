@@ -399,13 +399,13 @@ class Game:
 
 	def _format_feet_inches(self, feet_value):
 		if feet_value <= 0:
-			return "0ft 0in"
+			return "0' 0''"
 		feet = int(math.floor(feet_value))
 		inches = int(round((feet_value - feet) * 12))
 		if inches == 12:
 			feet += 1
 			inches = 0
-		return f"{feet}ft {inches}in"
+		return f"{feet}' {inches}''"
 
 	def _update_balance_tracking(self, dt):
 		if self.in_tutorial:
@@ -1638,8 +1638,8 @@ class Game:
 			f"BALANCE ABILITY: {user.get('balance_ability', 0.0):.2f}",
 			f"MAX JUMP HEIGHT: {self._format_feet_inches(user.get('max_jump_height_ft', 0.0))}",
 			f"AVG JUMP HEIGHT: {self._format_feet_inches(user.get('avg_jump_height_ft', 0.0))}",
-			f"MAX SHUFFLE SPEED: {user.get('max_shuffle_speed_fps', 0.0):.2f} FT/S",
-			f"AVG SHUFFLE SPEED: {user.get('avg_shuffle_speed_fps', 0.0):.2f} FT/S",
+			f"MAX SHUFFLE SPEED: {user.get('max_shuffle_speed_fps', 0.0):.2f} FT.S",
+			f"AVG SHUFFLE SPEED: {user.get('avg_shuffle_speed_fps', 0.0):.2f} FT.S",
 		]
 		line_surfs = [self.subtitle_font.render(line, True, COLOR_BARS_TEXT) for line in lines]
 		max_w = max(s.get_width() for s in line_surfs)
