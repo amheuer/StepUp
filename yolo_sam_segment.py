@@ -17,6 +17,7 @@ def run_yolo_sam_pipeline(
     sam_model: str = "sam2_b.pt",
     conf_threshold: float = 0.25,
     output_dir: str = "output",
+    grid_size: int = 32,
 ):
     """
     Run YOLO detection followed by SAM segmentation.
@@ -27,6 +28,7 @@ def run_yolo_sam_pipeline(
         sam_model: SAM model weights (downloaded automatically).
         conf_threshold: Confidence threshold for YOLO detections.
         output_dir: Directory to save results.
+        grid_size: Number of grid cells along each axis. Lower = more pixelated.
     """
     output_path = Path(output_dir)
     output_path.mkdir(exist_ok=True)
@@ -72,51 +74,54 @@ def run_yolo_sam_pipeline(
     sam_results = sam(image_path, bboxes=bboxes, verbose=False)
     sam_result = sam_results[0]
 
-    # ── 4. Visualise & save ─────────────────────────────────────────
+    # ── 4. Isolate & pixelate masked person ───────────────────────
     image = cv2.imread(image_path)
-    overlay = image.copy()
-
-    # Generate distinct colours for each detection
-    rng = np.random.default_rng(42)
-    colours = rng.integers(60, 255, size=(len(bboxes), 3)).tolist()
+    h, w = image.shape[:2]
 
     if sam_result.masks is not None:
-        masks = sam_result.masks.data.cpu().numpy()  # (N, H, W) bool / float
+        masks = sam_result.masks.data.cpu().numpy()  # (N, H, W)
 
-        for i, (mask, box, conf, cls_id) in enumerate(
-            zip(masks, bboxes, confs, cls_ids)
-        ):
-            colour = colours[i]
-            label = f"{class_names[cls_id]} {conf:.2f}"
+        # Use the first (only) mask
+        binary_mask = (masks[0] > 0.5).astype(np.uint8)
 
-            # Draw filled mask on overlay
-            binary_mask = (mask > 0.5).astype(np.uint8)
-            coloured_mask = np.zeros_like(image)
-            coloured_mask[:] = colour
-            overlay[binary_mask == 1] = cv2.addWeighted(
-                overlay[binary_mask == 1], 0.5,
-                coloured_mask[binary_mask == 1], 0.5, 0,
-            )
+        # Extract the person pixels; transparent (black) background
+        isolated = cv2.bitwise_and(image, image, mask=binary_mask)
 
-            # Draw bounding box
-            x1, y1, x2, y2 = box.astype(int)
-            cv2.rectangle(overlay, (x1, y1), (x2, y2), colour, 2)
+        # Pixelate using a grid that divides the image into grid_size cells
+        pixelated = np.zeros_like(image)
+        cell_h = max(1, h // grid_size)
+        cell_w = max(1, w // grid_size)
 
-            # Put label
-            (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 1)
-            cv2.rectangle(overlay, (x1, y1 - th - 8), (x1 + tw, y1), colour, -1)
-            cv2.putText(
-                overlay, label, (x1, y1 - 4),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1, cv2.LINE_AA,
-            )
+        for row in range(grid_size):
+            for col in range(grid_size):
+                y1 = row * cell_h
+                x1 = col * cell_w
+                y2 = min(y1 + cell_h, h)
+                x2 = min(x1 + cell_w, w)
 
-    # Save result
-    stem = Path(image_path).stem
-    out_file = output_path / f"{stem}_segmented.jpg"
-    cv2.imwrite(str(out_file), overlay)
-    print(f"[INFO] Saved segmented image to: {out_file}")
+                # Only fill if any masked pixel is in this cell
+                cell_mask = binary_mask[y1:y2, x1:x2]
+                if cell_mask.any():
+                    cell_pixels = isolated[y1:y2, x1:x2]
+                    masked_pixels = cell_pixels[cell_mask == 1]
+                    avg_colour = masked_pixels.mean(axis=0).astype(np.uint8)
+                    pixelated[y1:y2, x1:x2] = avg_colour
 
-    return overlay
+        # Save pixelated isolated person
+        stem = Path(image_path).stem
+        out_file = output_path / f"{stem}_pixelated.png"
+        cv2.imwrite(str(out_file), pixelated)
+        print(f"[INFO] Saved pixelated mask to: {out_file}")
+
+        # Also save the clean binary mask
+        mask_file = output_path / f"{stem}_mask.png"
+        cv2.imwrite(str(mask_file), binary_mask * 255)
+        print(f"[INFO] Saved binary mask to:    {mask_file}")
+
+        return pixelated
+    else:
+        print("[WARN] SAM produced no masks.")
+        return None
 
 
 # ── CLI entry point ─────────────────────────────────────────────────
@@ -135,6 +140,8 @@ if __name__ == "__main__":
                         help="YOLO confidence threshold (default: 0.25)")
     parser.add_argument("--output-dir", default="output",
                         help="Output directory (default: output/)")
+    parser.add_argument("--grid-size", type=int, default=32,
+                        help="Number of grid cells per axis, lower = more pixelated (default: 32)")
     args = parser.parse_args()
 
     run_yolo_sam_pipeline(
@@ -143,4 +150,5 @@ if __name__ == "__main__":
         sam_model=args.sam_model,
         conf_threshold=args.conf,
         output_dir=args.output_dir,
+        grid_size=args.grid_size,
     )
