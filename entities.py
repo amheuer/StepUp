@@ -57,24 +57,23 @@ class Player:
 			self.radius * 2,
 		)
 
-	def update(self, dt, keys):
+	def update(self, dt, move_dir, jump_pressed):
 		"""Update player position and velocity."""
 		self.jumped_this_frame = False
 		# Horizontal movement based on input
 		ax = 0
-		if keys[pygame.K_LEFT] or keys[pygame.K_a]:
+		if move_dir < 0:
 			ax -= 1
-		if keys[pygame.K_RIGHT] or keys[pygame.K_d]:
+		elif move_dir > 0:
 			ax += 1
 		self.vx = ax * PLAYER_MOVE_SPEED
 
 		# Jump on UP key press (not held)
-		up_pressed = keys[pygame.K_UP] or keys[pygame.K_w] or keys[pygame.K_SPACE]
-		if up_pressed and not self.prev_up_pressed and self.can_jump:
+		if jump_pressed and not self.prev_up_pressed and self.can_jump:
 			self.jump()
 			self.can_jump = False
 			self.jumped_this_frame = True
-		self.prev_up_pressed = up_pressed
+		self.prev_up_pressed = jump_pressed
 
 		# Update position
 		self.x += self.vx * dt
