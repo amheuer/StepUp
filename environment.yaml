@@ -1,0 +1,16 @@
+name: yolo-sam
+channels:
+  - pytorch
+  - nvidia
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.12
+  - pytorch>=2.10
+  - torchvision>=0.25
+  - pytorch-cuda=12.8
+  - numpy
+  - pip
+  - pip:
+      - ultralytics>=8.4
+      - opencv-python
