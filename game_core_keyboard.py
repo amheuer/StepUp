@@ -504,7 +504,7 @@ class Game:
 			WINDOW_WIDTH - step_w - 30, WINDOW_HEIGHT - 160,
 			width=step_w, height=PLATFORM_HEIGHT, kind="normal",
 		)
-		right_plat.fade_duration = 1e9
+		right_plat.respawn_delay = 2.0       # reappear 2 s after vanishing
 		self.platforms.append(right_plat)
 
 		# 3.  Left-side step (higher)
@@ -512,7 +512,7 @@ class Game:
 			30, WINDOW_HEIGHT - 300,
 			width=step_w, height=PLATFORM_HEIGHT, kind="normal",
 		)
-		left_plat.fade_duration = 1e9
+		left_plat.respawn_delay = 2.0
 		self.platforms.append(left_plat)
 
 		# 4.  Portal at the top centre

@@ -7,8 +7,7 @@
   "ME": {
     "highscore": 106,
     "lifetime_calories": 0.30266666666666575,
-    "minutes_played": 0.03783333333333322,
-    "intensity": "MEDIUM"
+    "minutes_played": 0.03783333333333322
   },
   "LA": {
     "highscore": 0,
@@ -300,7 +299,7 @@
     "avg_shuffle_speed_fps": 0.0,
     "pixels_per_foot": 10.521176214913355
   },
-  "L": {
+  "DSFIWOIWOFW": {
     "highscore": 0,
     "lifetime_calories": 0.0,
     "minutes_played": 0.0,
@@ -309,7 +308,28 @@
     "avg_jump_height_ft": 0.0,
     "max_shuffle_speed_fps": 0.0,
     "avg_shuffle_speed_fps": 0.0,
-    "pixels_per_foot": null,
-    "intensity": "HIGH"
+    "pixels_per_foot": null
+  },
+  "OUH8F": {
+    "highscore": 0,
+    "lifetime_calories": 7.513066666666445,
+    "minutes_played": 0.9391333333333056,
+    "balance_ability": 0.0,
+    "max_jump_height_ft": 0.0,
+    "avg_jump_height_ft": 0.0,
+    "max_shuffle_speed_fps": 0.0,
+    "avg_shuffle_speed_fps": 0.0,
+    "pixels_per_foot": 8.503867369595039
+  },
+  "JEFFLIES": {
+    "highscore": 253,
+    "lifetime_calories": 8.555599999999682,
+    "minutes_played": 1.0694499999999603,
+    "balance_ability": 1455.87593175996,
+    "max_jump_height_ft": 0.6402028877177888,
+    "avg_jump_height_ft": 0.5523548316634929,
+    "max_shuffle_speed_fps": 3.476521779422866,
+    "avg_shuffle_speed_fps": 2.0936921787442198,
+    "pixels_per_foot": 20.511487678196993
   }
 }
