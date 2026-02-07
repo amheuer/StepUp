@@ -106,7 +106,7 @@ class Player:
 				sprite = Player.sprite_right
 			else:
 				sprite = Player.sprite_stand
-			rect = sprite.get_rect(center=(int(self.x), int(self.y)))
+			rect = sprite.get_rect(midbottom=(int(self.x), int(self.y + self.radius)))
 			surface.blit(sprite, rect)
 			return
 		pygame.draw.circle(surface, self.color, (int(self.x), int(self.y)), self.radius)

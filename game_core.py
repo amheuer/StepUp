@@ -160,13 +160,22 @@ class Game:
 		"""Load player sprites."""
 		stand = pygame.image.load(PLAYER_DIR / "stand_still.png").convert_alpha()
 		left = pygame.image.load(PLAYER_DIR / "move_left.png").convert_alpha()
-		right = pygame.transform.flip(left, True, False)
 		jump = pygame.image.load(PLAYER_DIR / "jump.png").convert_alpha()
-		size = PLAYER_RADIUS * 2
-		stand = pygame.transform.smoothscale(stand, (size, size))
-		left = pygame.transform.smoothscale(left, (size, size))
-		right = pygame.transform.smoothscale(right, (size, size))
-		jump = pygame.transform.smoothscale(jump, (size, size))
+
+		target_w = PLAYER_RADIUS * 2
+		def scale_by_width(img):
+			h = int(img.get_height() * (target_w / img.get_width()))
+			return pygame.transform.smoothscale(img, (target_w, h))
+
+		stand = scale_by_width(stand)
+		left = scale_by_width(left)
+		jump = scale_by_width(jump)
+		# Match heights to stand while preserving aspect ratio.
+		def match_height(img, target_h):
+			w = int(img.get_width() * (target_h / img.get_height()))
+			return pygame.transform.smoothscale(img, (w, target_h))
+		left = match_height(left, stand.get_height())
+		right = pygame.transform.flip(left, True, False)
 		Player.load_sprites(stand, left, right, jump)
 
 	def _load_backgrounds(self):
