@@ -7,7 +7,7 @@ from pathlib import Path
 import pygame
 
 from collisions import check_if_on_platform
-from coins import collect_coins, cull_coins, spawn_coins_near_platforms
+from coins import Coin, collect_coins, cull_coins, spawn_coins_near_platforms
 from config import (
 	COLOR_BARS,
 	COLOR_BARS_TEXT,
@@ -19,6 +19,7 @@ from config import (
 	WINDOW_HEIGHT,
 	WINDOW_TITLE,
 	WINDOW_WIDTH,
+	COIN_RADIUS,
 )
 from entities import Player, Platform
 from platforms import create_initial_platforms, generate_new_platforms
@@ -30,6 +31,9 @@ BG_DIR = (
 	/ "Sprites"
 	/ "BGs"
 )
+SOUNDTRACK_PATH = Path(__file__).resolve().parent / "assets" / "Sounds" / "Jeremy Blake - Powerup!.mp3"
+SFX_DIR = Path(__file__).resolve().parent / "assets" / "brackeys_platformer_assets" / "sounds"
+COIN_DIR = Path(__file__).resolve().parent / "assets" / "Coin" / "spinning_coin"
 TILESET_PATH = (
 	Path(__file__).resolve().parent
 	/ "assets"
@@ -45,6 +49,7 @@ class Game:
 
 	def __init__(self):
 		pygame.init()
+		pygame.mixer.init()
 		self.screen = pygame.display.set_mode((0, 0), pygame.FULLSCREEN)
 		pygame.display.set_caption(WINDOW_TITLE)
 		self.clock = pygame.time.Clock()
@@ -52,8 +57,14 @@ class Game:
 		self.ui_font = pygame.font.SysFont(None, UI_FONT_SIZE)
 		self.game_surface = pygame.Surface((WINDOW_WIDTH, WINDOW_HEIGHT))
 		self.high_score = 0
+		self.next_high_score_sfx = 1000
 		tileset = pygame.image.load(TILESET_PATH).convert_alpha()
 		Platform.load_tileset(tileset)
+		self._load_coin_frames()
+		self.sfx = self._load_sfx()
+		pygame.mixer.music.load(SOUNDTRACK_PATH)
+		pygame.mixer.music.play(-1)
+		self.skip_sfx_frames = 0
 		self._load_backgrounds()
 		self.particle_surface_far = self._build_particle_layer(50)
 		self.particle_surface_near = self._build_particle_layer(90)
@@ -70,6 +81,39 @@ class Game:
 		self.score = 0
 		self.height_jumped = 0
 		self.coins_collected = 0
+		self.next_high_score_sfx = 1000
+		pygame.mixer.music.play(-1)
+		self.skip_sfx_frames = 2
+
+	def _load_sfx(self):
+		"""Load sound effects by filename."""
+		names = [
+			"coin.wav",
+			"explosion.wav",
+			"hurt.wav",
+			"jump.wav",
+			"power_up.wav",
+			"tap.wav",
+		]
+		sfx = {}
+		for name in names:
+			path = SFX_DIR / name
+			sound = pygame.mixer.Sound(path)
+			if name == "coin.wav":
+				sound.set_volume(0.35)
+			sfx[name] = sound
+		return sfx
+
+	def _load_coin_frames(self):
+		"""Load spinning coin animation frames."""
+		frames = []
+		for i in range(1, 11):
+			path = COIN_DIR / f"coin{i}.png"
+			frame = pygame.image.load(path).convert_alpha()
+			size = COIN_RADIUS * 2
+			frame = pygame.transform.smoothscale(frame, (size, size))
+			frames.append(frame)
+		Coin.load_frames(frames, frame_time_ms=80)
 
 	def _load_backgrounds(self):
 		"""Load background layers from the asset pack."""
@@ -124,11 +168,20 @@ class Game:
 
 		# Store previous position for collision detection
 		prev_y = self.player.y
+		was_on_platform = self.player.on_platform
+		prev_high_score = self.high_score
+		play_sfx = self.skip_sfx_frames <= 0
+		if self.skip_sfx_frames > 0:
+			self.skip_sfx_frames -= 1
 
 		# Update entities
 		self.player.update(dt, keys)
+		if play_sfx and self.player.jumped_this_frame:
+			self.sfx["jump.wav"].play()
 		for platform in self.platforms:
 			platform.update(dt)
+			if play_sfx and platform.just_broke:
+				self.sfx["hurt.wav"].play()
 
 		# Reset jump ability each frame, only set if colliding with platform
 		self.player.can_jump = False
@@ -144,6 +197,8 @@ class Game:
 			self.player.can_jump = True  # Allow player to jump
 			self.player.x += platform_below.vx * dt
 			platform_below.land()  # Start fading this platform
+			if play_sfx and not was_on_platform:
+				self.sfx["tap.wav"].play()
 
 		# Handle scrolling
 		if self.player.y < SCROLL_THRESHOLD:
@@ -174,14 +229,22 @@ class Game:
 		coin_score, coin_count = collect_coins(self.player, self.coins)
 		self.score += coin_score
 		self.coins_collected += coin_count
+		if play_sfx and coin_count > 0:
+			self.sfx["coin.wav"].play()
 		if self.score > self.high_score:
 			self.high_score = self.score
+		if play_sfx and self.high_score >= self.next_high_score_sfx:
+			self.sfx["power_up.wav"].play()
+			self.next_high_score_sfx += 1000
 
 		# Cull coins
 		self.coins = cull_coins(self.coins)
 
 		# Check game over condition
 		if self.player.y - self.player.radius > WINDOW_HEIGHT:
+			if play_sfx:
+				self.sfx["explosion.wav"].play()
+			pygame.mixer.music.stop()
 			self.game_over = True
 
 	def draw_background(self):
