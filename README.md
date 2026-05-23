@@ -1,5 +1,7 @@
 # StepUp
 
+> This project was built in **24 hours** for [TartanHacks 2026](https://www.instagram.com/p/DRss6qFjNmb/) at **Carnegie Mellon University** where it won the **Polychrome Mosaic** award.
+
 StepUp is a Doodle‑Jump‑style platformer built with Pygame that blends classic jump‑up gameplay with health‑themed metrics. It supports:
 
 - Multiple platform types (normal, moving, fragile).
